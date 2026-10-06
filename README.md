@@ -27,9 +27,7 @@ RTC reading captured at boot.
 Muzix does not provide the complete MINIX ABI or its full set of servers and
 drivers. For example, `wait()` currently reaps an already-exited child once
 or returns `-1`; pipes are bounded and do not block the calling process. For
-implementation limits and platform rules, see [`AGENTS.md`](./AGENTS.md); for
-a comparison with MINIX, see
-[`../MINIX_MUZIX_COMPARISON.md`](../MINIX_MUZIX_COMPARISON.md).
+implementation limits and platform rules, see [`AGENTS.md`](./AGENTS.md)
 
 ## Low-level code origins
 
