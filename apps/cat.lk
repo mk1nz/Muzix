@@ -1,0 +1,14 @@
+-mjwx
+-i cat.ihx
+-b _CODE = 0x8000
+; _DATA is placed immediately after _CODE by the linker default
+; layout; a fixed 0x9000 sat INSIDE shell's 0x1833-byte text and
+; silently overwrote _sys_times, _sys_signal and _sys_open at exec time.
+../lib/crt0.rel
+cat.rel
+../lib/math.rel
+../lib/sdcc_runtime.rel
+../lib/libc.rel
+../lib/syscall.rel
+../lib/user_syscall.rel
+-e

@@ -1,0 +1,37 @@
+# SDCC and assembler outputs
+*.rel
+*.ihx
+*.asm
+*.lst
+*.map
+*.sym
+*.noi
+
+# *.lk is NOT here, and used to be.  These are hand-written linker scripts, not
+# toolchain output: sdldz80 takes one with -f and never writes one.  Measured by
+# cleaning and rebuilding and comparing the set of .lk files before and after -
+# identical, seven files, all of them inputs.  Each app's link rule names one as
+# a prerequisite (`apps/date.ihx: apps/date.rel apps/date.lk ...`), so an
+# untracked script means no place to put the code and no way to link it.
+# tools/check_link_scripts.rb fails the build if one goes missing or untracked.
+
+# Local root-level test binaries and host build products
+/test_*
+# ...but not the host harness source.  `/test_*` is meant for the root-level
+# test binaries a Z80 test build leaves behind; it also matches test_host/,
+# which is source, and an untracked z80_io_host.c means z80_outb is undefined
+# and every host test that reaches the bank model silently reports as not
+# linkable.  Measured by checking the file in.
+!/test_host/
+/build/
+/platform/zeta-v2/test_kernel/test_bank_model
+*.o
+*.a
+
+# Editor and OS metadata
+.DS_Store
+.vscode/
+*.d
+
+# Generated build identity, printed in the shell banner
+shell/muzix_build_stamp.h

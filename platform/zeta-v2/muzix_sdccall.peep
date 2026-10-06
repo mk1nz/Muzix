@@ -1,0 +1,15 @@
+; Muzix custom peephole rules
+; Rename SDCC runtime call stubs to our custom implementations
+; so the compiler runtime library is never used.
+
+replace {
+    call ___sdcc_call_hl
+} by {
+    call _muzix_sdz80_call_hl
+}
+
+replace {
+    call ___sdcc_call_iy
+} by {
+    call _muzix_sdz80_call_iy
+}

@@ -1,0 +1,13 @@
+-mjwx
+-i top.ihx
+-b _CODE = 0x8000
+; _DATA is placed immediately after _CODE by the linker default
+; layout, the same as echo/cat/ls/date.
+../lib/crt0.rel
+top.rel
+../lib/math.rel
+../lib/sdcc_runtime.rel
+../lib/libc.rel
+../lib/syscall.rel
+../lib/user_syscall.rel
+-e

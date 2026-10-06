@@ -1,0 +1,53 @@
+-m build/kernel.map
+-i build/kernel.ihx
+-b _CODE = 0x0098
+-b _DATA = 0xE000
+kernel_entry.rel
+libc_str.rel
+rom_read.rel
+kernel_main.rel
+kernel_bank_model.rel
+z80_io.rel
+z80_syscall_entry.rel
+context_switch.rel
+syscall_vector.rel
+syscall_entry.rel
+syscall_runtime.rel
+zeta_bank_io.rel
+zeta_uart_io.rel
+bank_call.rel
+sdz80_runtime.rel
+mm_service.rel
+system_copy.rel
+system_task.rel
+scheduler.rel
+process_state.rel
+runtime_state.rel
+bootstrap.rel
+proc_table.rel
+init_task.rel
+startup.rel
+system_entry.rel
+kernel_loop.rel
+syscalls.rel
+system_service.rel
+pm_service.rel
+block_device.rel
+block_cache.rel
+allocator.rel
+allocator_store.rel
+tty_device.rel
+inode_table.rel
+inode_store.rel
+superblock.rel
+directory.rel
+directory_store.rel
+path.rel
+file_io.rel
+volume.rel
+fs_service.rel
+mproc_model.rel
+syscall_entry_stub.rel
+shell.rel
+exec_loader.rel
+-e

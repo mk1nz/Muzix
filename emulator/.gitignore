@@ -1,0 +1,79 @@
+# Vendored third-party emulator trees.
+#
+# romwbw_emu/ is 79 MB of the 84 MB in this directory - a RomWBW emulator
+# checkout that is not this project's code. Tracking it would dominate the
+# repository without contributing any history for anything written here. It
+# stays on disk; build_rom.sh's ../../Tools/bin/tasm references are likewise
+# relative to a checkout layout this tree does not have.
+
+romwbw_emu/
+zeta/
+romwbw_emu.bak/
+
+# Build products. The emulator is plain C with no separate build directory, so
+# the objects land next to their sources.  The per-device object files are
+# covered by *.o above.
+#
+# zeta_sbc_v2/ used to be listed here as though it were a binary.  It is a
+# source directory, and listing it silently untracked the whole Zeta SBC V2
+# model: the model 47e6b9e wired into the build, and that every DS1302 fix
+# since has landed in.  A model the build compiles and the repository does not
+# have is a model the next checkout does not build - and it is worse than that,
+# because a fix to it sits uncommitted and nothing reports it.  The
+# calendar-carry fix in 6ae6a3a was exactly that, and had to be caught by hand.
+#
+# What the build actually compiles from that directory is ONE file.  Measured
+# two ways, both agreeing: `make -C emulator info` prints the resolved SRCS
+# list, and building this emulator from a copy of `git ls-files` alone compiles
+# and links zeta_sbc_v2/emu_ds1302.c and nothing else from here.  The other 23
+# .c files are the rest of the model - a real Zeta SBC V2, with its own FDC,
+# PPI, CTC and CP/M layers - and none of it is in this build.  47e6b9e left
+# them out on purpose: they may carry symbols that collide with z80pack.c, and
+# pulling them in would risk a working emulator for no gain.
+#
+# So they stay ignored, which is a decision about what to *compile*, not a claim
+# that they are build products.  They remain on disk.  The one that is compiled
+# is un-ignored here rather than force-added, so it is a normal tracked file:
+# see tools/check_emulator_sources.rb, which fails the build if a source the
+# Makefile compiles is untracked or still matched by a rule.  Adding a file to
+# SRCS means un-excluding it here too, and that gate is what will say so.
+zeta_sbc_v2/*
+!zeta_sbc_v2/emu_ds1302.c
+!zeta_sbc_v2/emulator.h
+*.o
+*.bak
+z80pack-emu
+romwbw_emu
+decode_boot
+mem_offset_test
+mem_verify_test
+test_memory
+test_memory_dump
+test_debug
+trace_boot
+trace_ldir
+test_ldir_complete
+test_ldir_debug
+test_ldir_fixed
+test_ldir_simple
+test_ldir_trace
+test_ldir_verify
+
+# Assembled test binaries and images.
+*.bin
+*.rom
+*.img
+
+# Captured output from test runs. These are regenerated on every run and were
+# the bulk of the noise in the working tree.
+*.log
+*.txt
+capture.txt
+console.txt
+out.log
+out.txt
+verbose.txt
+trace.log
+trace2.log
+boot_output.txt
+test_output.txt
