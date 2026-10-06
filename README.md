@@ -6,6 +6,8 @@ format, but it is not a MINIX port and does not implement the MINIX ABI.
 Some low-level Zeta V2 support routines and techniques have been adapted from
 FUZIX; Muzix is not a FUZIX port or fork.
 
+https://github.com/user-attachments/assets/4791f19b-e926-4950-8006-2b37b8837c56
+
 ## What's included
 
 - `kernel/` — entry point, kernel loop, process table, scheduling, system
