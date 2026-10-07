@@ -26,7 +26,14 @@ stage2_entry:
         di
         ld sp,#STACK_TOP
 
-        ; Zeta V2 NS16550-compatible UART: 8N1, FIFO enabled, 115200 divisor.
+        ; Zeta V2 NS16550-compatible UART: 8N1, FIFO enabled, 115200 baud.
+        ; Program divisor 1 (1.8432 MHz / (16 * 115200) = 1) with DLAB.
+        ld a,#0x83
+        out (0x6b),a
+        ld a,#0x01
+        out (0x68),a
+        xor a
+        out (0x69),a
         ld a,#0x03
         out (0x6b),a
         ld a,#0x07

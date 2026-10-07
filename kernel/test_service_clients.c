@@ -39,9 +39,6 @@
                       0, MUZIX_SEG_DATA, 0x0200u, 0x0010u) != MUZIX_SYS_SERVICE_OK) {
         return 4;
     }
-    if (muzix_fs_process_exit(&fs, 0, 1) != MUZIX_SYS_SERVICE_OK) {
-        return 5;
-    }
 
     return 0;
 }

@@ -322,17 +322,17 @@ static int32_t muzix_dispatch_userspace_syscall(
             return -1;
         }
 
-        /* The exiting process's own pages go back to the allocator now, while
-         * the ownership record still points at them. Its slot is about to be
-         * torn down by muzix_proc_table_exit_status(). */
-        muzix_proc_table_release_pages(processes, parent_slot,
-                                       ctx->kernel->loop->mm);
-
         if (muzix_proc_table_exit_status(
                 processes, parent_slot, (uint8_t)ctx->ppid,
                 (uint8_t)arg1) != 0) {
             return -1;
         }
+
+        /* The exiting process's own pages go back to the allocator now that
+         * the teardown has succeeded. If exit_status failed the slot is still
+         * active and must keep its pages. */
+        muzix_proc_table_release_pages(processes, parent_slot,
+                                       ctx->kernel->loop->mm);
 
         /* Hand the CPU back to whoever forked this process.
          *
@@ -997,7 +997,7 @@ static int32_t muzix_dispatch_userspace_syscall(
     case MUZIX_USER_SYS_CLOSE:
         return muzix_fs_service_close(ctx->fs, (int)arg1);
     case MUZIX_USER_SYS_READ:
-        if (arg3 < 0) {
+        if (arg3 < 0 || (uint32_t)arg3 > 65535u) {
             return -1;
         }
         /* Chunked, because a single transfer cannot exceed the MM's staging
@@ -1060,7 +1060,7 @@ static int32_t muzix_dispatch_userspace_syscall(
         }
 
     case MUZIX_USER_SYS_WRITE:
-        if (arg3 < 0) {
+        if (arg3 < 0 || (uint32_t)arg3 > 65535u) {
             return -1;
         }
         {

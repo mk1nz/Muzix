@@ -45,16 +45,16 @@ relocated:
         ld sp,#STACK_TOP
 
         ; Ask UNA which unit selected this boot sector.
-        ld bc,#(UNABIOS_BOOTGET << 8 | UNABIOS_HISTORY)
+        ld bc,#(UNABIOS_HISTORY << 8 | UNABIOS_BOOTGET)
         call #UNABIOS_ENTRY
         ld a,l
         ld (boot_unit),a
 
         ; Load into the page that UNA reserves for the booted user image.
         ; This is UNA's bank API, not an emulator FDC interface.
-        ld bc,#(UNABIOS_GET_USER_PAGES << 8 | UNABIOS_GETINFO)
+        ld bc,#(UNABIOS_GETINFO << 8 | UNABIOS_GET_USER_PAGES)
         call #UNABIOS_ENTRY
-        ld bc,#(UNABIOS_BANK_SET << 8 | UNABIOS_BANKEDMEM)
+        ld bc,#(UNABIOS_BANKEDMEM << 8 | UNABIOS_BANK_SET)
         call #UNABIOS_ENTRY
 
         ; Preserve the UNA entry vector for a stage-2 that needs BIOS calls

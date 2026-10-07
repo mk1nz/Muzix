@@ -679,7 +679,7 @@ int muzix_tty_write(muzix_tty_device_t *tty,
 {
     size_t index;
 
-    if (!tty || !result) {
+    if (!tty || !result || !buffer) {
         return -1;
     }
     *result = 0;

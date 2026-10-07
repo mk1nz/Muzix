@@ -64,12 +64,21 @@ static int muzix_fs_file_zone_alloc(muzix_fs_block_cache_t *cache,
         *zone = inode->zone[index];
     } else {
         uint16_t indirect_index = (uint16_t)(index - MUZIX_FS_DIRECT_ZONES);
-        if (inode->indirect_zone == 0 &&
-            muzix_fs_zone_alloc(allocator, &inode->indirect_zone) != 0) {
-            return -1;
+        uint8_t indirect_was_allocated = 0;
+        if (inode->indirect_zone == 0) {
+            if (muzix_fs_zone_alloc(allocator, &inode->indirect_zone) != 0) {
+                return -1;
+            }
+            indirect_was_allocated = 1;
         }
         if (muzix_fs_cache_get(cache, inode->indirect_zone, &indirect) != 0) {
             return -1;
+        }
+        if (indirect_was_allocated) {
+            memset(indirect, 0, MUZIX_FS_BLOCK_SIZE);
+            if (muzix_fs_cache_mark_dirty(cache, inode->indirect_zone) != 0) {
+                return -1;
+            }
         }
         *zone = (uint16_t)indirect[indirect_index * 2] |
                 ((uint16_t)indirect[indirect_index * 2 + 1] << 8);

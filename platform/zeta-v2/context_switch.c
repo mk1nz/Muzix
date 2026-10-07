@@ -366,6 +366,9 @@ static void copy_temp_map(const zeta_state_t *state,
                           uint8_t region,
                           process_map_t *out)
 {
+    if (region >= 4 || page > 0x3F) {
+        return;
+    }
     out->pages[0] = state->bank_reg[0];
     out->pages[1] = state->bank_reg[1];
     out->pages[2] = state->bank_reg[2];

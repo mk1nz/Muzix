@@ -58,12 +58,4 @@ uint16_t muzix_mproc_umap(const muzix_mproc_t *mp,
                          uint16_t vir_addr,
                          uint16_t bytes);
 void muzix_mproc_to_zeta_map(const muzix_mproc_t *mp, process_map_t *out);
-void muzix_sys_copy(muzix_mm_service_t *mm,
-                    const muzix_mproc_t *src_mp,
-                    int src_seg,
-                    uint16_t src_vir,
-                    const muzix_mproc_t *dst_mp,
-                    int dst_seg,
-                    uint16_t dst_vir,
-                    size_t len);
 #endif

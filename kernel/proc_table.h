@@ -311,7 +311,8 @@ int muzix_proc_table_queue_signal(muzix_kernel_proc_table_t *table,
                                   int slot,
                                   uint8_t signal);
 int muzix_proc_table_deliver_pending(muzix_kernel_proc_table_t *table,
-                                     int slot);
+                                     int slot,
+                                     muzix_mm_service_t *mm);
 int muzix_proc_table_pick_next(muzix_kernel_proc_table_t *table);
 int muzix_proc_table_yield(muzix_kernel_proc_table_t *table);
 void muzix_proc_table_switch_to_kernel(muzix_kernel_proc_table_t *table);

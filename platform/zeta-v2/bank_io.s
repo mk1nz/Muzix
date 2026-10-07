@@ -26,10 +26,11 @@
 ; where the CPU is fetching from.  The only way to find out is to look at the
 ; address the caller is about to return to.
 ;
-; On entry SP points at the return address into the function that called us,
-; so the caller's *own* return address is at SP+2.  Its high byte selects the
-; window: 0x00-0x3F is window 0 ($0000-$3FFF), which always maps kernel page
-; 0x20 and is therefore the only window that survives a bank switch.
+; The two C forwarders in context_switch.c (zeta_cross_bank_call_impl and
+; zeta_with_temp_map_impl) push HL and DE before calling us, so the caller's
+; return address is at SP+6 from inside this function.  Direct callers that
+; do not push anything would put it at SP+2, but the only call sites in the
+; tree are those two forwarders, so SP+6 is the reliable offset.
 ;
 ; Returns 1 in A when the calling function resumes in window 0, 0 otherwise.
 ; Call this *directly* from the public entry point that is about to switch
@@ -37,7 +38,7 @@
 ; module, which is in window 0 by construction and would make the check
 ; vacuously true.
 _muzix_zeta_caller_in_window0:
-    ld hl, #2
+    ld hl, #6
     add hl, sp
     ld e, (hl)
     inc hl

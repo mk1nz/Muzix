@@ -218,8 +218,4 @@ int muzix_fs_service_write_inode(muzix_fs_service_t *fs,
                                  size_t *result);
 
 
-int muzix_fs_process_exit(muzix_fs_service_t *fs,
-                          uint8_t parent_slot,
-                          uint8_t child_slot);
-
 #endif

@@ -135,25 +135,6 @@ void muzix_mproc_to_zeta_map(const muzix_mproc_t *mp, process_map_t *out)
         return;
     }
 
-    /* This has to say exactly what kernel/exec_loader.c installs, because the
-     * result is not merely descriptive: the MM-mediated copy installs it as a
-     * temporary map over the one the process is actually running.
-     *
-     *     proc_map.pages[1] = exec_pages[2];   /* the stack page *
-     *     proc_map.pages[2] = exec_pages[1];   /* the text page  *
-     *     proc_map.pages[3] = MUZIX_ZETA_KERNEL_BANK_3;
-     *
-     * Deriving the windows from segment *names* instead produced
-     * {20 25 25 26} for a process actually running as {20 26 25 23}: window 1
-     * held the text page and window 3 the stack.  The copy then banked the text
-     * page into window 1 in order to read a stack address, so every character
-     * the TTY transmitted was the process's own instructions instead of its
-     * output - and the kernel's own code in $4000-$7FFF was being replaced by
-     * user text for the duration of the callback.
-     *
-     * The mproc cannot express this by itself: exec_loader gives TEXT and DATA
-     * the same page, so which page lands in which window is a property of the
-     * loader rather than of the segment table. */
     if (mp->mp_seg[MUZIX_SEG_STACK].mem_len != 0) {
         tmp.pages[1] = muzix_page_from_phys(mp->mp_seg[MUZIX_SEG_STACK].mem_phys);
     }
@@ -162,34 +143,4 @@ void muzix_mproc_to_zeta_map(const muzix_mproc_t *mp, process_map_t *out)
     }
 
     *out = tmp;
-}
-
-void muzix_sys_copy(muzix_mm_service_t *mm,
-                    const muzix_mproc_t *src_mp,
-                    int src_seg,
-                    uint16_t src_vir,
-                    const muzix_mproc_t *dst_mp,
-                    int dst_seg,
-                    uint16_t dst_vir,
-                    size_t len)
-{
-    process_map_t src_map = {{0, 0, 0, 0}};
-    process_map_t dst_map = {{0, 0, 0, 0}};
-    uint8_t tmp[256];
-
-    if (!mm || !src_mp || !dst_mp ||
-        !muzix_mproc_range_valid(src_mp, src_seg, src_vir, len) ||
-        !muzix_mproc_range_valid(dst_mp, dst_seg, dst_vir, len)) {
-        return;
-    }
-
-    if (len > sizeof(tmp)) {
-        return;
-    }
-
-    muzix_mproc_to_zeta_map(src_mp, &src_map);
-    muzix_mproc_to_zeta_map(dst_mp, &dst_map);
-
-    muzix_mm_copy_page_to_kernel(mm, src_map.pages[0], src_vir, tmp, len);
-    muzix_mm_copy_kernel_to_user(mm, dst_map.pages[0], dst_vir, tmp, len);
 }

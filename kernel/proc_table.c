@@ -805,7 +805,8 @@ int muzix_proc_table_queue_signal(muzix_kernel_proc_table_t *table,
 }
 
 int muzix_proc_table_deliver_pending(muzix_kernel_proc_table_t *table,
-                                     int slot)
+                                     int slot,
+                                     muzix_mm_service_t *mm)
 {
     uint16_t pending;
     uint8_t signal;
@@ -827,6 +828,7 @@ int muzix_proc_table_deliver_pending(muzix_kernel_proc_table_t *table,
     parent_pid = table->slots[slot].parent_pid;
     table->slots[slot].pending_signals &=
         (uint16_t)~((uint16_t)1u << (signal - 1));
+    muzix_proc_table_release_pages(table, slot, mm);
     return muzix_proc_table_exit_status(table, slot, parent_pid,
                                         (uint8_t)(128u + signal));
 }

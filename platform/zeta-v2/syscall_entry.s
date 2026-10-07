@@ -223,10 +223,12 @@ _muzix_z80_syscall_entry:
     ld      a, h
     or      l
     jr      Z, fork_stack_done       ; nothing in use
-    ld      a, h
-    cp      #0x04                    ; refuse a stack pointer outside window 1
-    jr      C, fork_stack_measure
-    jr      fork_stack_done
+    ld      a, d
+    cp      #0x40                    ; refuse a stack pointer below window 1
+    jr      C, fork_stack_done
+    cp      #0x80                    ; refuse a stack pointer above window 1
+    jr      NC, fork_stack_done
+    ; fall through to measure
 fork_stack_measure:
     ld      (_muzix_fork_stack_len), hl
 fork_stack_done:

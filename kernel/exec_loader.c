@@ -214,6 +214,13 @@ int muzix_exec_load(void)
 
     g_exec_entry_point = (uint16_t)(g_exec_load_buf[2] |
                                     ((uint16_t)g_exec_load_buf[3] << 8));
+    if (g_exec_entry_point < MUZIX_EXEC_TEXT_ADDR ||
+        g_exec_entry_point >= MUZIX_EXEC_TEXT_ADDR +
+                               (uint16_t)(g_exec_file_size - 4)) {
+        muzix_fs_service_close(g_exec_fs, g_exec_handle);
+        exec_fail('E');
+        return -1;
+    }
 
     /* Two pages, not three. The map needs exactly one for the text and one for
      * the stack; the third was allocated, never placed in the map and never

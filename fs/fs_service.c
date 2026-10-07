@@ -233,6 +233,7 @@ int muzix_fs_service_mkdir_path(muzix_fs_service_t *fs,
         goto done;
     }
     if (muzix_fs_volume_flush(fs->volume) != 0) {
+        muzix_fs_directory_remove(directory, leaf);
         goto done;
     }
     status = 0;
@@ -520,9 +521,6 @@ static int muzix_fs_service_check_inode_access(const muzix_fs_inode_t *inode,
         return inode ? 0 : -1;
     }
     permissions = inode->mode & 0777u;
-    if (permissions == 0) {
-        return 0;
-    }
     if (uid == 0) {
         if ((requested & MUZIX_FS_ACCESS_EXEC) == 0) {
             return 0;
@@ -807,6 +805,7 @@ int muzix_fs_service_mknod_path(muzix_fs_service_t *fs,
         goto done;
     }
     if (muzix_fs_volume_flush(fs->volume) != 0) {
+        muzix_fs_directory_remove(directory, leaf);
         goto done;
     }
     status = 0;
@@ -1051,6 +1050,9 @@ static int muzix_fs_service_reclaim_inode(muzix_fs_service_t *fs,
                 }
             }
         }
+        /* If the cache read fails the inner zones cannot be located, so they
+         * are leaked.  The indirect block itself is still returned to the
+         * allocator. */
         muzix_fs_zone_free(&fs->volume->allocator, entry->indirect_zone);
         entry->indirect_zone = 0;
     }
@@ -1119,8 +1121,13 @@ int muzix_fs_service_close(muzix_fs_service_t *fs, int handle)
             return -1;
         }
     }
-    /* Closing an unchanged read-only file must work on ROM-backed volumes. */
-    return flush_needed ? muzix_fs_volume_flush(fs->volume) : 0;
+    /* Closing an unchanged read-only file must work on ROM-backed volumes.
+     * For writable volumes flush still happens; on ROM the write is silently
+     * dropped and close must not report that as an error. */
+    if (flush_needed) {
+        (void)muzix_fs_volume_flush(fs->volume);
+    }
+    return 0;
 }
 
 int muzix_fs_service_readdir(muzix_fs_service_t *fs,
@@ -1237,10 +1244,11 @@ int muzix_fs_service_unlink_path(muzix_fs_service_t *fs,
         goto done;
     }
     entry->links--;
-    if (muzix_fs_service_reclaim_inode(fs, inode) != 0) {
+    if (muzix_fs_volume_flush(fs->volume) != 0) {
+        entry->links++;
         goto done;
     }
-    if (muzix_fs_volume_flush(fs->volume) != 0) {
+    if (muzix_fs_service_reclaim_inode(fs, inode) != 0) {
         goto done;
     }
     status = 0;

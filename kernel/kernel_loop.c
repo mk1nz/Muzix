@@ -355,7 +355,8 @@ void muzix_kernel_loop_run(muzix_kernel_loop_t *loop)
         if (loop->system.startup.proc_table.current >= 0 &&
             muzix_proc_table_deliver_pending(
                 &loop->system.startup.proc_table,
-                loop->system.startup.proc_table.current) != 0) {
+                loop->system.startup.proc_table.current,
+                loop->mm) != 0) {
             muzix_system_entry_switch_to_kernel(&loop->system);
             loop->current_pid = -1;
             loop->state = MUZIX_KERNEL_LOOP_IDLE;
@@ -428,6 +429,7 @@ void muzix_kernel_loop_yield(muzix_kernel_loop_t *loop)
         if (!next->active || next->entry_point == 0) {
             /* Nothing runnable to hand to. Stay in the kernel rather than jump
              * to address 0 and die in the boot stub. */
+            loop->system.startup.proc_table.current = -1;
             return;
         }
 

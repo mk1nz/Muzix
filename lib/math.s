@@ -14,7 +14,10 @@ __divuint:
     ld a,d
     or e
     jp z,divuint_zero
-    ; HL = dividend, DE = divisor
+    ld a, d
+    or a
+    jp nz, divuint_zero
+    ; HL = dividend, DE = divisor (8-bit, high byte is zero)
     ; Result in HL
     xor a
     ld b,#16

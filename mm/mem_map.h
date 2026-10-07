@@ -30,19 +30,6 @@ void muzix_proc_init(muzix_proc_t *proc,
                      uint16_t text_len,
                      uint16_t data_len,
                      uint16_t stack_len);
-void muzix_proc_to_zeta_map(const muzix_proc_t *proc, process_map_t *out);
 uint16_t muzix_umap(const muzix_proc_t *proc, int seg, uint16_t vir_addr, uint16_t bytes);
-void muzix_copy_in(muzix_mm_service_t *mm,
-                  const muzix_proc_t *proc,
-                  int seg,
-                  uint16_t vir_addr,
-                  uint8_t *dst,
-                  size_t len);
-void muzix_copy_out(muzix_mm_service_t *mm,
-                   const muzix_proc_t *proc,
-                   int seg,
-                   uint16_t vir_addr,
-                   const uint8_t *src,
-                   size_t len);
 
 #endif
