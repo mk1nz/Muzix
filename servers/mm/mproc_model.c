@@ -1,0 +1,128 @@
+#include "mproc_model.h"
+
+#include <string.h>
+
+static uint8_t muzix_page_from_phys(uint32_t phys)
+{
+    return (uint8_t)(phys >> 14);
+}
+
+void muzix_mproc_init(muzix_mproc_t *mp,
+                      uint32_t text_phys,
+                      uint32_t data_phys,
+                      uint32_t stack_phys,
+                      uint16_t text_len,
+                      uint16_t data_len,
+                      uint16_t stack_len,
+                      uint8_t pid)
+{
+    if (!mp) {
+        return;
+    }
+
+    memset(mp, 0, sizeof(*mp));
+    mp->mp_pid = pid;
+    mp->mp_flags = 1;
+
+    mp->mp_seg[MUZIX_SEG_TEXT].mem_vir = 0;
+    mp->mp_seg[MUZIX_SEG_TEXT].mem_phys = text_phys;
+    mp->mp_seg[MUZIX_SEG_TEXT].mem_len = text_len;
+
+    mp->mp_seg[MUZIX_SEG_DATA].mem_vir = 0;
+    mp->mp_seg[MUZIX_SEG_DATA].mem_phys = data_phys;
+    mp->mp_seg[MUZIX_SEG_DATA].mem_len = data_len;
+
+    mp->mp_seg[MUZIX_SEG_STACK].mem_vir = 0;
+    mp->mp_seg[MUZIX_SEG_STACK].mem_phys = stack_phys;
+    mp->mp_seg[MUZIX_SEG_STACK].mem_len = stack_len;
+}
+
+void muzix_mproc_set_seg(muzix_mproc_t *mp,
+                         int seg,
+                         uint16_t vir,
+                         uint8_t page,
+                         uint16_t len)
+{
+    if (!mp || seg < 0 || seg >= MUZIX_NR_SEGS) {
+        return;
+    }
+
+    mp->mp_seg[seg].mem_vir = vir;
+    mp->mp_seg[seg].mem_phys = (uint32_t)page * 0x4000;
+    mp->mp_seg[seg].mem_len = len;
+}
+
+void muzix_mproc_set_all_segs(muzix_mproc_t *mp, const muzix_seg_pages_t *pages)
+{
+    if (!mp || !pages) {
+        return;
+    }
+
+    mp->mp_seg[MUZIX_SEG_TEXT].mem_vir = 0;
+    mp->mp_seg[MUZIX_SEG_TEXT].mem_phys = (uint32_t)pages->text_page * 0x4000;
+    mp->mp_seg[MUZIX_SEG_TEXT].mem_len = 0x4000;
+
+    mp->mp_seg[MUZIX_SEG_DATA].mem_vir = 0;
+    mp->mp_seg[MUZIX_SEG_DATA].mem_phys = (uint32_t)pages->data_page * 0x4000;
+    mp->mp_seg[MUZIX_SEG_DATA].mem_len = 0x4000;
+
+    mp->mp_seg[MUZIX_SEG_STACK].mem_vir = 0;
+    mp->mp_seg[MUZIX_SEG_STACK].mem_phys = (uint32_t)pages->stack_page * 0x4000;
+    mp->mp_seg[MUZIX_SEG_STACK].mem_len = 0x4000;
+}
+
+int muzix_mproc_range_valid(const muzix_mproc_t *mp,
+                            int seg,
+                            uint16_t vir_addr,
+                            size_t bytes)
+{
+    const muzix_mem_map_t *m;
+    uint16_t offset;
+
+    if (!mp || seg < 0 || seg >= MUZIX_NR_SEGS || bytes == 0) {
+        return 0;
+    }
+
+    m = &mp->mp_seg[seg];
+    if (vir_addr < m->mem_vir) {
+        return 0;
+    }
+
+    offset = (uint16_t)(vir_addr - m->mem_vir);
+    return bytes <= (size_t)m->mem_len && offset <= (uint16_t)(m->mem_len - bytes);
+}
+
+uint16_t muzix_mproc_umap(const muzix_mproc_t *mp,
+                         int seg,
+                         uint16_t vir_addr,
+                         uint16_t bytes)
+{
+    const muzix_mem_map_t *m;
+    uint32_t base;
+
+    if (!muzix_mproc_range_valid(mp, seg, vir_addr, bytes)) {
+        return 0;
+    }
+
+    m = &mp->mp_seg[seg];
+    base = m->mem_phys;
+    return (uint16_t)(base + vir_addr - m->mem_vir);
+}
+
+void muzix_mproc_to_zeta_map(const muzix_mproc_t *mp, process_map_t *out)
+{
+    process_map_t tmp = {{0x20, 0x21, 0x22, 0x23}};
+
+    if (!mp || !out) {
+        return;
+    }
+
+    if (mp->mp_seg[MUZIX_SEG_STACK].mem_len != 0) {
+        tmp.pages[1] = muzix_page_from_phys(mp->mp_seg[MUZIX_SEG_STACK].mem_phys);
+    }
+    if (mp->mp_seg[MUZIX_SEG_TEXT].mem_len != 0) {
+        tmp.pages[2] = muzix_page_from_phys(mp->mp_seg[MUZIX_SEG_TEXT].mem_phys);
+    }
+
+    *out = tmp;
+}

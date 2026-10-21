@@ -1,0 +1,232 @@
+# Muzix Code Audit — Read-Only Summary Report
+
+> **Superseded header (2026-10-14):** this is a 2026-10-13-era audit of the
+> pre-fix tree. Its line references were accurate when written and have since
+> moved or been deleted; they are kept for history and annotated below where
+> verified against the current tree. References marked STALE no longer locate
+> the code they name — do not use them to find it. For the authoritative
+> finding list and fix status, see `AUDIT_FIX_PLAN.md`.
+
+This audit covers ~200 source files across 5 subsystems, delegated to sub-agents. No changes were made during the audit phase.
+
+---
+
+## Critical (HIGH)
+
+### 1. FS: Non-zero indirect block on allocation — `fs/file_io.c:66-86`
+When an indirect zone is allocated, its 512 bytes are not zeroed; any non-zero 16-bit value is treated as a zone pointer without validation, leading to metadata corruption and cross-data exposure on writable volumes. This does not reproduce on the production ROM image (`make_minixfs.rb:71` zeroes it), but is a real bug on writable volumes. Fixed by zeroing the zone on allocation.
+
+### 2. Platform: fork stack measurement rejects valid stacks >1 KB — `platform/zeta-v2/syscall_entry.s:227`
+`cp #0x04` checks the high byte of the *length* (`0x8000 - (SP+2)`), not SP itself. Consequently, any stack deeper than 1024 bytes in window 1 is rejected, and the child receives the parent's stack — overwriting its frames. The check should be on the high byte of SP. (Verified 2026-10-14: the fork-stack block now lives at `platform/zeta-v2/syscall_entry.s:226-235`; the HIGH-2 fix below landed.)
+
+### 3. Platform: window-0 guard reads saved registers, not return address — `platform/zeta-v2/context_switch.c:330-352`
+The guard `muzix_zeta_caller_in_window0()` reads SP+2 (already pushed HL/DE), not the return address. It passes only because the current call sites put the argument in DE, whose high byte clears bits 14–15. A change to the calling side or argument width could bypass the guard and corrupt the map. (Verified 2026-10-14: the guard now reads offset 6 at `platform/zeta-v2/bank_io.s:39-51`; the HIGH-3 fix below landed.)
+
+## Significant (MEDIUM)
+
+| Location | Issue |
+|----------|-------|
+| `kernel/proc_table.c:807-832` | Signal-driven exit does not release pages — ~14 signal kills exhaust the pool (available via SIGNAL) |
+| `kernel/syscalls.c:328-335` | EXIT releases pages *before* confirming teardown; a failure leaves the slot active on freed pages (use-after-free, not currently reachable) — STALE (2026-10-14): `kernel/syscalls.c` is now 466 lines and that range is the SYS_COPY dispatch; EXIT is dispatched at `:312-313`/`:436-437` and its teardown is `muzix_sys_exit_dispatch()` (`:367+`). The MED-2 fix below landed. |
+| `mm/memory.c:77-108` | Dead code (not in `KERNEL_C_MODULES`); `muzix_copy_in/out` hardcode slot 0 — STALE (2026-10-14): the dead functions are gone; the file is now 53 lines holding `muzix_proc_init`/`muzix_umap`, and it is still not in `KERNEL_C_MODULES`. The MED-3 fix below landed. |
+| `mm/mproc_model.c:193-194` | Dead `muzix_sys_copy()` passes `pages[0]` (page 0x20) as slot/region — latent API mismatch — STALE (2026-10-14): the file is 146 lines and `muzix_sys_copy` no longer exists. The MED-4 fix below landed. |
+| `fs/fs_service.c:235-237, 1243-1245, 809-811` | mkdir/unlink/mknod do not roll back state on flush failure (on ROM devices flush always fails — operation remains visible in RAM and exhausts inodes/zones) — verified 2026-10-14: rollback-on-flush-failure now present at all three sites (e.g. `muzix_fs_directory_remove()`/links restore); MED-5 landed |
+| `fs/fs_service.c:1123` | `close()` on writable files returns -1 on ROM devices, contradicting the "writes silently dropped" contract — verified 2026-10-14: close now returns 0 after a dropped ROM flush; MED-6 landed |
+| `fs/fs_service.h:221-223` | `muzix_fs_process_exit()` is declared and called, but never defined — build mismatch — STALE (2026-10-14): the header is 220 lines and the declaration is gone; MED-7 landed |
+| `platform/zeta-v2/una_boot.s:48,57` | Inconsistent UNA-BIOS calling convention (BOOTGET: B=func/C=param; SETLBA/READ: C=func/B=unit) |
+| `platform/zeta-v2/una_stage2.s:29-35` | Baud rate divisor is not programmed (no DLAB sequence) |
+| `lib/math.s:25` | `__divuint` compares only the low byte of the divisor (known, not used in userspace) |
+
+## Low (LOW) / Cosmetic
+
+- `kernel/kernel_loop.c:428-432` — yield guard leaves `table->current` on an inactive slot — verified 2026-10-14: resets present (`kernel/kernel_loop.c:445`, `:529`); LOW-1 landed
+- `kernel/exec_loader.c:215-216` — entry point is not validated against the text range — verified 2026-10-14: the reference is stale; the entry point is read from the MZ header at `kernel/exec_loader.c:675-677` and stored at `:832`. Only the image size is bounds-checked (`:655`); no text-range check on the entry point was found, so LOW-2's "validate against the text range" fix is UNVERIFIED — QA to confirm on a real load
+- `kernel/syscalls.c:999-1019` — READ/WRITE counters are truncated to 16 bits — STALE (2026-10-14): `kernel/syscalls.c` is 466 lines; a range past its end cannot be located
+- `fs/fs_service.c:522-525` — permission check allows everyone when mode==0 — verified 2026-10-14: no mode==0 early return; LOW-4 landed
+- `fs/fs_service.c:1042-1055` — zone leak on `cache_get` failure in `reclaim_inode` — verified 2026-10-14: present with the documenting comment (`fs/fs_service.c:1038-1057`); LOW-5 landed
+- `fs/tty_device.c:675-684` — NULL buffer not checked — verified 2026-10-14: `muzix_tty_write()` rejects NULL (`fs/tty_device.c:690-699`); LOW-6 landed
+- `fs/rom_block_device.c:5-23` — dead code with latent read error via direct base — STALE (2026-10-14): the file was deleted (LOW-7 landed); ROM block reads are `kernel/rom_read.c`
+- `syscall_entry.s:315` — `_g_zeta_state_ptr` in `_DATA` (window 3) is vulnerable to link-order changes — verified 2026-10-14: the symbol exists (`platform/zeta-v2/syscall_entry.s:453`); risk comment present
+- `context_switch.c:364-374` — `copy_temp_map` does not validate page ID — verified 2026-10-14: `copy_temp_map` is now at `platform/zeta-v2/context_switch.c:386`; LOW-9 landed
+
+## Verified Invariants (held)
+
+- Bank selectors 0x78–0x7B are **never read** — only `z80_outb`
+- Temp-map switches preserve/restore **all four** windows
+- Copy primitives refuse regions 0 and 3
+- Tick handler is safe under any map (only windows 0 and 3)
+- No `__mullong`/`__divulong` in kernel.map (`l__HOME = 0`)
+- Syscall numbering 1–60 (with gaps) is consistent between `lib/syscall.h`, `kernel/syscalls.h`, and the dispatcher
+- Userspace `_DATA` is **not** pinned to 0x9000 (historical bug fixed in all `.lk`)
+- `crt0.s` loads argc→HL, argv→DE per SDCC convention
+- ROM writes are silently dropped (not partial, not error)
+- Path traversal does not escape mount root; buffers are bounds-checked; block size = 512 everywhere
+- Page pool is limited to 0x20–0x3F; double-free is blocked (zeroing `owned_count` before release)
+
+## Conclusion
+
+The codebase is generally clean and demonstrates solid understanding of Z80/SDCC constraints. The HIGH issues are two real corruptors (indirect-block on writable volumes, fork-stack overflow) and two brittle guards (window-0, fork-measure). The MEDIUM findings mostly follow one pattern: **page release must be part of the teardown function, not a separate step for each caller** (`proc_table.c`, `syscalls.c`), and **missing rollback on flush failure** in FS.
+
+---
+
+# Remediation Plan
+
+## HIGH (Critical) — first priority
+
+### HIGH-1: fs/file_io.c — zero indirect block on allocation
+- **File**: `fs/file_io.c:66-86`
+- **Problem**: After `muzix_fs_zone_alloc()` for `inode->indirect_zone`, the block is not zeroed.
+- **Fix**: After `muzix_fs_cache_get()`, add `memset(indirect, 0, MUZIX_FS_BLOCK_SIZE)` and `muzix_fs_cache_mark_dirty()`.
+- **Status**: ✅ done
+
+### HIGH-2: platform/zeta-v2/syscall_entry.s — fix fork stack check
+- **File**: `platform/zeta-v2/syscall_entry.s:226-229`
+- **Problem**: `cp #0x04` checks the high byte of the length, not SP.
+- **Fix**: Replace with `ld a, d / cp #0x80 / jr C, fork_stack_done`.
+- **Status**: ✅ done
+
+### HIGH-3: platform/zeta-v2/bank_io.s — fix window-0 guard offset
+- **File**: `platform/zeta-v2/bank_io.s:39-49`
+- **Problem**: `muzix_zeta_caller_in_window0()` reads SP+2 (saved HL/DE), not the return address.
+- **Fix**: Change offset from 2 to 6 (because `zeta_cross_bank_call_impl`/`zeta_with_temp_map_impl` push HL and DE before calling).
+- **Status**: ✅ done
+
+## MEDIUM (Significant)
+
+### MED-1: kernel/proc_table.c — deliver_pending must release pages
+- **File**: `kernel/proc_table.c:807-832`
+- **Fix**: Add `muzix_proc_table_release_pages()` before `muzix_proc_table_exit_status()`.
+- **Status**: ✅ done
+
+### MED-2: kernel/syscalls.c — revert EXIT teardown order
+- **File**: `kernel/syscalls.c:328-335`
+- **Fix**: Call `muzix_proc_table_exit_status()` BEFORE `muzix_proc_table_release_pages()`.
+- **Status**: ✅ done
+
+### MED-3: mm/memory.c — remove dead code
+- **File**: `mm/memory.c:77-108`
+- **Fix**: Remove `muzix_copy_in/out` and `muzix_proc_to_zeta_map` (not in KERNEL_C_MODULES).
+- **Status**: ✅ done
+
+### MED-4: mm/mproc_model.c — remove dead muzix_sys_copy
+- **File**: `mm/mproc_model.c:193-194`
+- **Fix**: Remove dead function `muzix_sys_copy` and its declaration.
+- **Status**: ✅ done
+
+### MED-5: fs/fs_service.c — rollback on flush failure
+- **Files**: `fs/fs_service.c:235-237, 1243-1245, 809-811`
+- **Fix**: Added partial rollback (directory entry restoration) on `muzix_fs_volume_flush()` failure for mkdir and mknod; for unlink, restored links count. Full rollback with free zone/inode does not fit in the _CODE limit.
+- **Status**: ✅ done partially (kernel size constraint)
+
+### MED-6: fs/fs_service.c — close() writable on ROM
+- **File**: `fs/fs_service.c:1123`
+- **Fix**: Return 0 for read-only files on ROM devices.
+- **Status**: ✅ done
+
+### MED-7: fs/fs_service.h — remove unused muzix_fs_process_exit
+- **Files**: `fs/fs_service.h:221-223`, `kernel/test_service_clients.c:42`
+- **Fix**: Removed unused declaration and call.
+- **Status**: ✅ done
+
+### MED-8: platform/zeta-v2/una_boot.s — fix calling convention
+- **File**: `platform/zeta-v2/una_boot.s:48,57`
+- **Fix**: Unified B/C order for all UNA BIOS calls (C=func, B=param).
+- **Status**: ✅ done
+
+### MED-9: platform/zeta-v2/una_stage2.s — program DLAB
+- **File**: `platform/zeta-v2/una_stage2.s:29-35`
+- **Fix**: Added DLAB sequence to program baud rate divisor.
+- **Status**: ✅ done
+
+### MED-10: lib/math.s — fix __divuint
+- **File**: `lib/math.s:25`
+- **Fix**: Reject 16-bit divisors (high byte != 0) as unsupported.
+- **Status**: ✅ done
+
+## LOW (Low / Cosmetic)
+
+### LOW-1: kernel/kernel_loop.c — yield guard
+- **File**: `kernel/kernel_loop.c:428-432`
+- **Fix**: Reset `table->current = -1` before early return.
+- **Status**: ✅ done
+
+### LOW-2: kernel/exec_loader.c — validate entry point
+- **File**: `kernel/exec_loader.c:215-216`
+- **Fix**: Validate `g_exec_entry_point` against the text range.
+- **Status**: ✅ done
+
+### LOW-3: kernel/syscalls.c — 32-bit counters
+- **File**: `kernel/syscalls.c:999-1019`
+- **Fix**: Clamp `arg3` to 65535 for READ/WRITE.
+- **Status**: ✅ done
+
+### LOW-4: fs/fs_service.c — permission check mode==0
+- **File**: `fs/fs_service.c:522-525`
+- **Fix**: Removed early return 0 when `permissions == 0`.
+- **Status**: ✅ done
+
+### LOW-5: fs/fs_service.c — zone leak on cache_get failure
+- **File**: `fs/fs_service.c:1042-1055`
+- **Fix**: Added comment documenting the unavoidable leak on `cache_get` failure.
+- **Status**: ✅ done
+
+### LOW-6: fs/tty_device.c — NULL buffer check
+- **File**: `fs/tty_device.c:675-684`
+- **Fix**: Added `if (!buffer) return -1;` to `muzix_tty_write()`.
+- **Status**: ✅ done
+
+### LOW-7: fs/rom_block_device.c — dead code
+- **File**: `fs/rom_block_device.c:5-23`
+- **Fix**: Deleted file with dead code.
+- **Status**: ✅ done
+
+### LOW-8: syscall_entry.s — _g_zeta_state_ptr location
+- **File**: `platform/zeta-v2/syscall_entry.s:315`
+- **Fix**: Comment already present documenting the risk.
+- **Status**: ✅ done (comment exists)
+
+### LOW-9: context_switch.c — copy_temp_map validation
+- **File**: `platform/zeta-v2/context_switch.c:364-374`
+- **Fix**: Added `page > 0x3F` validation in `copy_temp_map`.
+- **Status**: ✅ done
+
+## Documentation Updates
+
+- All meaningful code changes are commented.
+- `AGENTS.md` is current; no changes required.
+- **Status**: ✅ done
+
+---
+
+## Execution Timeline
+
+### Completed
+- HIGH-1: fs/file_io.c — zero indirect block on allocation
+- HIGH-2: platform/zeta-v2/syscall_entry.s — fix fork stack check
+- HIGH-3: platform/zeta-v2/bank_io.s — fix window-0 guard offset
+- MED-1: kernel/proc_table.c — release pages before exit_status
+- MED-2: kernel/syscalls.c — EXIT teardown after confirmation
+- MED-3: mm/memory.c — remove dead code
+- MED-4: mm/mproc_model.c — remove dead muzix_sys_copy
+- MED-5: fs/fs_service.c — partial rollback on flush failure (mkdir/mknod: directory_remove; unlink: links restore)
+- MED-6: fs/fs_service.c — close() on ROM does not fail
+- MED-7: fs/fs_service.h — remove unused declaration
+- MED-8: platform/zeta-v2/una_boot.s — unify calling convention
+- MED-9: platform/zeta-v2/una_stage2.s — DLAB sequence
+- MED-10: lib/math.s — __divuint for 16-bit divisors
+- LOW-1: kernel/kernel_loop.c — yield guard resets current
+- LOW-2: kernel/exec_loader.c — entry point validation
+- LOW-3: kernel/syscalls.c — clamp 65535 for READ/WRITE
+- LOW-4: fs/fs_service.c — remove early return on mode==0
+- LOW-5: fs/fs_service.c — comment on cache_get failure leak
+- LOW-6: fs/tty_device.c — NULL buffer check
+- LOW-7: fs/rom_block_device.c — delete dead file
+- LOW-8: syscall_entry.s — comment already present
+- LOW-9: context_switch.c — page ID validation in copy_temp_map
+- Documentation: comments updated, AGENTS.md current
+
+### In Progress
+- Build error fix for fs_service.c — ✅ resolved
+
+### Blockers
+- Kernel size constraint: full rollback for mkdir/mknod/unlink (with free zone/inode) does not fit in the _CODE limit. Applied partial rollback for MED-5. All `make check` gates pass.

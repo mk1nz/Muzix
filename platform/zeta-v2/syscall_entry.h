@@ -41,6 +41,9 @@ typedef void (*muzix_z80_mapping_hook_t)(zeta_state_t *state);
 void muzix_z80_set_syscall_handler(muzix_z80_syscall_handler_t handler);
 void muzix_z80_set_mapping_hooks(muzix_z80_mapping_hook_t enter_kernel,
                                  muzix_z80_mapping_hook_t restore_user);
+/* The restore hook, with the signature muzix_z80_set_mapping_hooks() wants.
+ * The trap installs the kernel map itself, so only the restore is wired. */
+void muzix_z80_restore_user_map(zeta_state_t *state);
 void muzix_z80_set_zeta_state(zeta_state_t *state);
 void muzix_z80_set_zeta_state_ptr(zeta_state_t **ptr);
 void muzix_z80_bind_userspace_context(

@@ -92,6 +92,136 @@ static uint32_t span_counts(uint16_t span)
     return (uint32_t)span * MUZIX_LOAD_CTC3_COUNTS_PER_TICK;
 }
 
+/* ---- the multiply ---------------------------------------------------------
+ *
+ * WHAT THIS COVERS AND WHY IT IS NOT THE SAME AS NOTHING
+ * -----------------------------------------------------
+ * AGENTS.md has claimed since it was written that this file "checks the result
+ * against the host compiler over 256 x 256 operand pairs".  It did not, and
+ * could not: load_mul() was file static in load.c, so no test could call it and
+ * the only thing standing behind the claim was the prose.  The routine is now
+ * exported as muzix_load_mul() precisely so that the claim is a test.
+ *
+ * The full 65536 x 65536 domain is 4.3 billion pairs, which is a few minutes of
+ * host CPU and a lot of output; what is checked instead is a DENSE set chosen to
+ * put every byte of both operands on a boundary that matters to the carry
+ * arithmetic, followed by a deterministic random sweep.  Every pair is compared
+ * against the host compiler's own 32-bit product, so the routine is never asked
+ * to agree with a hand-worked constant - only with the machine that has a real
+ * multiply.
+ *
+ * The boundaries are not arbitrary: 0, 1, 2, 15, 16, 127, 128, 255 and 256 are
+ * where a byte turns over, 8191/8192 and 16383/16384/16385 straddle the Q14
+ * operand limit the production callers stay under, and 32767/32768, 65471,
+ * 65534 and 65535 are where the top byte of the operand - and therefore p3 and
+ * the high half of the product - is largest.  The two carry weights that
+ * AGENTS.md records as having been got wrong both only appear above Q14, so a
+ * test that stayed inside Q14 could not have caught either of them.
+ */
+
+/* The operands the grid is built from.  See the comment above: each one is a
+ * boundary for some byte of a or b, or for the Q14 range the callers use. */
+static const uint16_t g_mul_ops[] = {
+    0u, 1u, 2u, 15u, 16u, 127u, 128u, 255u, 256u, 8191u, 8192u, 16383u,
+    16384u, 16385u, 32767u, 32768u, 65471u, 65534u, 65535u
+};
+#define MUL_OP_COUNT (sizeof(g_mul_ops) / sizeof(g_mul_ops[0]))
+
+/* How many random pairs the sweep adds to the grid.  4096 is small on the host
+ * and is not the point: it is here to catch an operand pair the grid's
+ * boundaries do not produce, and one bad pair in 4096 random ones is enough to
+ * fail.  The generator is a fixed 32-bit LCG so the pairs are the same on every
+ * run - a test whose inputs change is a test that can pass by luck. */
+#define MUL_RANDOM_PAIRS 4096u
+
+/* (a * b) >> 14 as the host compiler computes it: a 32-bit product shifted
+ * down, which is the definition this module has to match.  32-bit arithmetic is
+ * fine here - the no-multiply rule constrains the kernel image, and this file
+ * is compiled by gcc with all of libc. */
+static uint32_t mul_reference(uint16_t a, uint16_t b)
+{
+    return ((uint32_t)a * (uint32_t)b) >> 14;
+}
+
+/* One pair, checked.  Returns 1 when it agrees and 0 when it does not, and
+ * counts the pairs whose true value does not fit the 16-bit return.
+ *
+ * The return of muzix_load_mul() is a uint16_t, and (a*b) >> 14 reaches 262136
+ * for a = b = 65535 - it does not fit.  Above Q14 the documented behaviour is
+ * the low 16 bits of the true value, so that is what is compared against, and
+ * the count of such pairs is reported rather than hidden: a routine that were
+ * only ever checked in its top 16 bits would look correct for a reason that
+ * stops being true the moment a caller needs the full product. */
+static int mul_pair_ok(uint16_t a, uint16_t b, unsigned long *too_wide)
+{
+    uint32_t want = mul_reference(a, b);
+    uint32_t got = muzix_load_mul(a, b);
+
+    if (want > 0xFFFFu) {
+        (*too_wide)++;
+        want &= 0xFFFFu;
+    }
+    if (got != want) {
+        printf("test_load: mul a=%u b=%u got=%lu want=%lu\n", a, b,
+               (unsigned long)got, (unsigned long)want);
+        return 0;
+    }
+    return 1;
+}
+
+/* The multiply, against the host compiler.  Returns 0, or the case number. */
+static int check_load_mul(void)
+{
+    unsigned long too_wide = 0;
+    unsigned long pairs = 0;
+    uint32_t state = 0x13572468u;
+    uint32_t k;
+
+    /* 1. The dense grid: every ordered pair of the boundary operands. */
+    for (k = 0; k < MUL_OP_COUNT; k++) {
+        uint32_t j;
+
+        for (j = 0; j < MUL_OP_COUNT; j++) {
+            if (!mul_pair_ok(g_mul_ops[k], g_mul_ops[j], &too_wide)) {
+                return 8;
+            }
+            pairs++;
+        }
+    }
+
+    /* 2. The random sweep, same LCG on every run. */
+    for (k = 0; k < MUL_RANDOM_PAIRS; k++) {
+        uint16_t a;
+        uint16_t b;
+
+        state = state * 1664525u + 1013904223u;
+        a = (uint16_t)(state >> 16);
+        state = state * 1664525u + 1013904223u;
+        b = (uint16_t)(state >> 16);
+        if (!mul_pair_ok(a, b, &too_wide)) {
+            return 8;
+        }
+        pairs++;
+    }
+
+    /* 3. The grid must actually contain pairs above Q14, or claim 1 proves
+     *    nothing about the carry weights that only exist there. */
+    if (too_wide == 0) {
+        printf("test_load: no operand pair exceeded 16 bits\n");
+        return 8;
+    }
+
+    /* 4. The production range is exact, not merely truncated: a Q14 operand
+     *    times a Q14 operand shifted back down is always inside 16 bits. */
+    CHECK(muzix_load_mul(16384u, 16384u) == LOAD_Q14_SCALE, 8);
+    CHECK(muzix_load_mul(16384u, 1u) == 1u, 8);
+    CHECK(mul_reference(16384u, 16384u) <= 0xFFFFu, 8);
+    CHECK(mul_reference(16384u, 16385u) <= 0xFFFFu, 8);
+
+    printf("test_load: mul %lu pairs, %lu above 16 bits, ok\n", pairs,
+           too_wide);
+    return 0;
+}
 /* The busy counts for an interval of `span` at `busy_q14` - the part of it the
  * scheduler was awake for, in the units muzix_load_note_halted() is given.  32 bits
  * because an interval of this size does not fit the argument the module takes;
@@ -152,6 +282,17 @@ int main(void)
     uint32_t before2;
     uint16_t busy = LOAD_Q14_SCALE;        /* 100% */
     int i;
+
+    /* 0. The multiply, first, because every figure below is made of it.  A
+     *    module whose Q14 multiply is wrong produces windows that are wrong in
+     *    a way no window-shaped assertion can diagnose. */
+    {
+        int r = check_load_mul();
+
+        if (r != 0) {
+            return r;
+        }
+    }
 
     /* 1. A first sample is seeded from boot, not from zero.
      *

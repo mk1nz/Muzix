@@ -32,7 +32,7 @@ root = ARGV[0] or abort "usage: check_syscall_context.rb <repo-root>"
 errors = []
 
 # --- the field list, from the struct itself ---------------------------------
-header = File.read(File.join(root, "kernel/syscalls.h"))
+header = File.read(File.join(root, "kernel/syscalls.h"), encoding: "UTF-8")
 struct = header[/^typedef struct [^{]*muzix_userspace_syscall_context\s*\{(.*?)^\}/m]
 abort "could not find muzix_userspace_syscall_context_t in kernel/syscalls.h" if struct.nil?
 
@@ -48,9 +48,13 @@ end
 abort "parsed no fields from the context struct" if fields.empty?
 
 # --- the handler, and its prologue ------------------------------------------
-syscalls = File.read(File.join(root, "kernel/syscalls.c"))
+syscalls = File.read(File.join(root, "kernel/syscalls.c"), encoding: "UTF-8")
 body = syscalls[/^int32_t muzix_handle_userspace_syscall\(.*?^\}/m]
-abort "could not find muzix_handle_userspace_syscall in kernel/syscalls.c" if body.nil?
+if body.nil?
+  syscalls_ipc = File.read(File.join(root, "kernel/syscalls_ipc.c"), encoding: "UTF-8")
+  body = syscalls_ipc[/^int32_t muzix_handle_userspace_syscall\(.*?^\}/m]
+end
+abort "could not find muzix_handle_userspace_syscall in kernel/syscalls.c or kernel/syscalls_ipc.c" if body.nil?
 
 # The prologue is everything before the first syscall-number dispatch. Identity
 # or credentials set after that point would be conditional on which call was

@@ -582,7 +582,12 @@ int muzix_fs_service_access_path(muzix_fs_service_t *fs, const char *path,
     return 0;
 }
 
-int muzix_fs_service_getcwd(muzix_fs_service_t *fs, char *buffer, size_t size)
+/* Signature matches fs/fs_service.h:141, which the authoritative fs/ tree
+ * declares const (the FS service only reads the cwd, it does not write the
+ * service).  This stub had dropped the qualifier and disagreed with the header
+ * it is compiled against, so the file failed to build at all - the test that
+ * covers the dispatcher never ran. */
+int muzix_fs_service_getcwd(const muzix_fs_service_t *fs, char *buffer, size_t size)
 {
     (void)fs;
     seen_enter("getcwd");

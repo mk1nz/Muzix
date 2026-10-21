@@ -18,7 +18,9 @@ user pages are allocated from physical RAM through MM.
 
 This image uses the MINIX-v1 filesystem format (magic `0x137f`, 512-byte
 blocks), built by
-`tools/make_minixfs.rb` from `build/<app>.bin` and three documents. `make rom`
+`tools/make_minixfs.rb` from the app binaries, the three server binaries, and
+three documents — the exact list is the `make_minixfs.rb` call in the
+`Makefile`. `make rom`
 places it at `0x20000`; the kernel mounts it through
 `kernel/rom_read.c`, and the shell execs programs out of its root by bare
 name.
@@ -32,11 +34,15 @@ name.
 > in the build referenced it even before that. The image is assembled from the
 > MINIX-v1-format filesystem by `make_zeta_rom.sh`.
 
-It carries twelve files, all flat — the only directory entries are `.` and `..`:
+It carries fifteen files, all flat — the only directory entries are `.` and
+`..`:
 
 | file | what it is |
 | --- | --- |
 | `shell` | PID 1 |
+| `fs_server` | FS server (slot 2) |
+| `mm_server` | MM server (slot 3) |
+| `pm_server` | PM server (slot 4) |
 | `echo` | user command |
 | `cat` | user command |
 | `ls` | user command |
@@ -45,9 +51,9 @@ It carries twelve files, all flat — the only directory entries are `.` and `..
 | `uptime` | interval since the boot reading of the clock |
 | `loadavg` | kernel CPU busy-fraction windows |
 | `hwdiag` | checks for userspace-visible RTC, load accounting, processes, ROMFS, and console query |
-| `readme` | `docs/architecture.md` |
-| `hw-notes` | `docs/hardware-notes.md` |
-| `copy-notes` | `docs/memory-copy-notes.md` |
+| `readme.txt` | `docs/architecture.md` |
+| `hw-notes.txt` | `docs/hardware-notes.md` |
+| `copy-notes.txt` | `docs/memory-copy-notes.md` |
 
 `hwdiag` reports the PPI, floppy controller, UART loopback and SRAM/flash page
 integrity as not tested: Muzix does not currently expose safe userspace drivers
@@ -55,11 +61,13 @@ or diagnostic interfaces for them. Board components listed here follow the
 [Zeta SBC V2 hardware documentation](https://github.com/skiselev/zeta_sbc/blob/0f57a102bc2ce50e34235c788376c5e989405907/README.md).
 
 The exact used-byte count is reported by the ROM build; `tools/rom_validator.rb`
-fails the build below 1 KiB free.
+warns (it does not fail the build) below 1 KiB free.
 
 There is no `init` in the image and never was. The shell is PID 1;
-`kernel/kernel_main.c` execs `"shell"` into slot 1.
+`kernel/kernel_main.c` execs `"shell"` into slot 1 after the three servers.
 
 Use `make test-rom-image` to check the size and the mandatory offsets, and
-`make test-rom-validator` to check the filesystem's structure and all twelve
-files.
+`make test-rom-validator` to check the filesystem's structure. The
+validator's own `EXPECTED_FILES` list covers the twelve non-server files; the
+image also carries the three server binaries, which it accepts by walking the
+directory.

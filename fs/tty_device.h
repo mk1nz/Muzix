@@ -73,16 +73,21 @@ typedef struct {
     uint8_t output_stopped;
 } muzix_tty_device_t;
 
-/* Wait for one input byte, giving up after MUZIX_TTY_READ_TICKS.  Returns 1 if
- * a byte is available, 0 if the wait timed out.  0 is a report, not an error
- * code: the caller decides whether running out of patience is a failure.
+/* Is there an input byte to read, right now?  Returns 1 if there is, 0 if
+ * there is not.  0 is a report, not an error code: the caller decides whether
+ * "not yet" is a failure, and lib/libc.c's read() turns it into a park.
+ *
+ * There is no wait and no budget here, deliberately: the deadline this used to
+ * carry (MUZIX_TTY_READ_TICKS) is gone with the spin it existed to bound.  One
+ * port read, and the answer is exact.  Nothing is consumed - the byte stays in
+ * the receive register until a recv takes it.
  *
  * This is in the header, and not `static` in tty_device.c, for a measured
  * reason that is easy to undo by accident: SDCC 4.5 inlines small static
- * functions, and when it inlined this one it took the deadline local and its
- * stack spill with it into muzix_tty_read() and grew that function by 222 bytes
- * for no extra work.  A non-static function is not a candidate.  The reason it
- * is a function at all is on the definition. */
+ * functions, and when it inlined this one it took its call site's spill with
+ * it into muzix_tty_read() and grew that function by 222 bytes for no extra
+ * work.  A non-static function is not a candidate.  The reason it is a
+ * function at all is on the definition. */
 int muzix_tty_wait_for_input(void);
 
 /* Collect one canonical line into tty->input.  Returns 1 when a line is ready or

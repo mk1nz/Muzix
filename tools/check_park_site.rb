@@ -63,7 +63,10 @@ Dir.glob(File.join(root, "kernel", "**", "*.c")).sort.each do |path|
   # check and the queue behaviour.  That is the point of them and it is not what
   # this rule is about.  The rule is about production call sites, where the slot
   # is not a choice - it is whichever process the trap just captured.
+  # msg_pool.c and proc_server.c are microkernel prep modules not linked into
+  # the kernel (overflow), so they're excluded.
   next if File.basename(path).start_with?("test_")
+  next if File.basename(path) == "msg_pool.c" || File.basename(path) == "proc_server.c"
 
   src = File.read(path)
 

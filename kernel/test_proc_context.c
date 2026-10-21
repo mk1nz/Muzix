@@ -65,6 +65,15 @@ extern uint16_t muzix_resume_ret;
 extern uint8_t muzix_resume_banks[4];
 extern uint16_t muzix_switch_pending;
 
+/* Host test definitions - these variables live in window 0 (_CODE) on Z80,
+ * but host tests run on gcc where there's no window distinction. Provide
+ * local definitions so the test links and runs. */
+uint16_t muzix_resume_pc = 0;
+uint16_t muzix_resume_sp = 0;
+uint16_t muzix_resume_ret = 0;
+uint8_t muzix_resume_banks[4] = {0};
+uint16_t muzix_switch_pending = 0;
+
 #define CHECK(cond, why) do { if (!(cond)) { return (why); } } while (0)
 
 /* The parent is in slot 0 and its child in slot 1, and the child's pid is 7 -

@@ -50,8 +50,9 @@ rom_start:
         ld bc,#0x4000
         ldir
 
-        ; Switch all windows to the copied kernel image.  The following JP is
-        ; fetched from the identically copied page 0 after the first OUT.
+        ; Switch all windows to the copied kernel image in RAM pages 32..35.
+        ; The following JP is fetched from the identically copied page 0
+        ; after the first OUT.
         ld a,#32
         out (0x78),a
         inc a
@@ -60,6 +61,11 @@ rom_start:
         out (0x7a),a
         inc a
         out (0x7b),a
+
+        ; Jump to kernel entry point at 0x0098
         jp 0x0098
 
+        ; Pad to 0x0098 (kernel entry point)
         .ds 0x98 - (.-rom_start)
+
+        ; Stage-2 entry point at 0x0098 (kernel linked here)

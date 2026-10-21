@@ -26,6 +26,14 @@
 #include "uart_io.h"
 #include "trace.h"
 
+extern uint16_t g_enter_entry_asm;
+extern uint16_t g_enter_entry_asm_local;
+
+/* Window-0 mirror of the live bank registers, kept in step by write_all_banks()
+ * below.  The syscall trap reads it before it switches the map, when _DATA - and
+ * therefore state->bank_reg[] - is the calling process's page. */
+extern uint8_t muzix_live_banks[4];
+
 const process_map_t g_kernel_map = {
     .pages = {0x20, 0x21, 0x22, 0x23}
 };
@@ -70,16 +78,39 @@ void zeta_context_stack_init(void)
  */
 static void write_all_banks(zeta_state_t *state, const uint8_t pages[4])
 {
-    /* Region 0 fixed to kernel bank 0x20 */
-    state->bank_reg[0] = 0x20;
+    /* Load all pages into locals FIRST with a compiler barrier.
+     * The pages[] array lives in window 3 (_DATA). The bank 3 write changes
+     * window 3's mapping, so if the compiler reorders the load of pages[3]
+     * to after the outb, it reads from the wrong page (ROM 0x00 instead of
+     * kernel 0x23). The barrier prevents this sinking. */
+    uint8_t p0 = 0x20;
+    uint8_t p1 = pages[1];
+    uint8_t p2 = pages[2];
+    uint8_t p3 = pages[3];
+    Z80_MEMORY_BARRIER();
+
+    state->bank_reg[0] = p0;
     z80_outb(MUZIX_ZETA_BANK_PORT_0, state->bank_reg[0]);
-    /* Regions 1,2,3 from map */
-    state->bank_reg[1] = pages[1];
+    state->bank_reg[1] = p1;
     z80_outb(MUZIX_ZETA_BANK_PORT_1, state->bank_reg[1]);
-    state->bank_reg[2] = pages[2];
+    state->bank_reg[2] = p2;
     z80_outb(MUZIX_ZETA_BANK_PORT_2, state->bank_reg[2]);
-    state->bank_reg[3] = pages[3];
+    state->bank_reg[3] = p3;
     z80_outb(MUZIX_ZETA_BANK_PORT_3, state->bank_reg[3]);
+
+    /* Mirror into window 0.  The syscall trap cannot read state->bank_reg[]
+     * before it switches the map - _DATA is window 2 and window 2 is the
+     * calling process's page at that moment - so this window-0 copy is what
+     * it reads instead.  It must be updated by every map install, not just
+     * the kernel's, or a process resumed onto a different map would have its
+     * stale map restored.
+     *
+     * Writing through a plain C pointer is safe here: this routine runs with
+     * the map it just installed, so window 0 is the kernel page either way. */
+    muzix_live_banks[0] = p0;
+    muzix_live_banks[1] = p1;
+    muzix_live_banks[2] = p2;
+    muzix_live_banks[3] = p3;
 }
 
 static void load_map(zeta_state_t *state, const process_map_t *map)
@@ -95,7 +126,6 @@ static void load_map(zeta_state_t *state, const process_map_t *map)
  * somewhere arbitrary.  That stayed hidden by accident of link order. */
 static void trace_map_refused(void)
 {
-    muzix_trace_write(ZETA_TRACE_WINDOW);
 }
 
 /* Install a map, or report that it was refused.
@@ -118,10 +148,11 @@ int zeta_load_map(zeta_state_t *state, const process_map_t *map)
 
 static void save_map(zeta_state_t *state, zeta_saved_context_t *saved)
 {
-    saved->pages[0] = state->bank_reg[0];
-    saved->pages[1] = state->bank_reg[1];
-    saved->pages[2] = state->bank_reg[2];
-    saved->pages[3] = state->bank_reg[3];
+    (void)state;
+    saved->pages[0] = muzix_live_banks[0];
+    saved->pages[1] = muzix_live_banks[1];
+    saved->pages[2] = muzix_live_banks[2];
+    saved->pages[3] = muzix_live_banks[3];
 }
 
 
@@ -171,28 +202,15 @@ void zeta_resume_process(zeta_state_t *state, const process_map_t *target_map)
         for (;;) { }
     }
     load_map(state, target_map);
-    /* Returns to its caller rather than jumping: the jump needs to reload SP and
-     * PC, and neither SDCC's inline assembler nor a C->assembly call will do
-     * that here - the inline assembler rejects `ld sp,hl` outright, and a C
-     * function calling a .s routine gets mangled with a double underscore. So
-     * the caller in kernel_entry.s does the jump instead, immediately after
-     * this returns, with the map already installed and the window-0 cells
-     * filled. It never comes back either way. */
-}
 
-void zeta_enter_process(zeta_state_t *state, const process_map_t *target_map)
-{
-    /* Both refusals used to be a bare `for(;;){}`, so a rejected handoff was an
-     * invisible hang with no output at all. Report the reason to the console
-     * before spinning; the trace ring is not dumped on this path. */
-    if (!state || !target_map) {
-        muzix_zeta_uart_send((uint8_t)'!', 0);
-        for (;;) { }
-    }
-    load_map(state, target_map);
+    /* Jump to the saved process context. The window-0 cells were filled
+     * by muzix_zeta_resume_from before the map change. We're now in the
+     * process's map, but window 0 (kernel page 0x20) still holds these. */
     __asm
-        ld hl, (_g_enter_entry_asm)
-        jp (hl)
+    ld      sp, (_g_resume_sp)
+    ld      de, (_g_resume_ret)
+    ld      hl, (_g_resume_pc)
+    jp      (hl)
     __endasm;
 }
 
@@ -241,8 +259,10 @@ static int map_call_impl(zeta_state_t *state,
     if (!state || !target_map || cb == ZETA_CB_NONE) {
         return -1;
     }
-    if (target_map->pages[3] != state->bank_reg[3]) {
-        muzix_trace_write(ZETA_TRACE_WINDOW3);
+    /* The window-3 rule, read off the window-0 mirror: it is the current map,
+     * not state->bank_reg[], which the syscall trap does not update - it writes
+     * the ports directly. */
+    if (target_map->pages[3] != muzix_live_banks[3]) {
         return -1;
     }
     if (g_context_depth >= ZETA_CONTEXT_DEPTH_MAX) {
@@ -366,13 +386,14 @@ static void copy_temp_map(const zeta_state_t *state,
                           uint8_t region,
                           process_map_t *out)
 {
+    (void)state;
     if (region >= 4 || page > 0x3F) {
         return;
     }
-    out->pages[0] = state->bank_reg[0];
-    out->pages[1] = state->bank_reg[1];
-    out->pages[2] = state->bank_reg[2];
-    out->pages[3] = state->bank_reg[3];
+    out->pages[0] = muzix_live_banks[0];
+    out->pages[1] = muzix_live_banks[1];
+    out->pages[2] = muzix_live_banks[2];
+    out->pages[3] = muzix_live_banks[3];
     out->pages[region] = page;
 }
 
@@ -386,11 +407,13 @@ static int copy_page_to_kernel_callback(void *arg)
         uint8_t *dst;
         size_t len;
     } *ctx = arg;
-    uint16_t i;
 
-    for (i = 0; i < ctx->len; i++) {
-        ctx->dst[i] = zeta_read_visible(ctx->state, ctx->address + i);
-    }
+    /* One LDIR, same reasoning as the two callbacks above: the byte loop was
+     * correct and slow, and the staged words are the house primitive. */
+    muzix_zeta_staged_src = ctx->address;
+    muzix_zeta_staged_dst = (uint16_t)(uintptr_t)ctx->dst;
+    muzix_zeta_staged_len = (uint16_t)ctx->len;
+    muzix_zeta_ldir_staged();
     return 0;
 }
 
@@ -414,12 +437,10 @@ int zeta_copy_page_to_kernel(zeta_state_t *state,
      * cannot honour its `page` argument at all: it returned the kernel's own
      * page 0x20 and the caller saw it as the requested page's contents. */
     if (region == 0) {
-        muzix_trace_write(ZETA_TRACE_WINDOW0);
         return -1;
     }
     /* Region 3 is the kernel's own window - see map_call_impl(). */
     if (region == 3) {
-        muzix_trace_write(ZETA_TRACE_WINDOW3);
         return -1;
     }
 
@@ -503,14 +524,33 @@ static int copy_kernel_to_user_callback(void *arg)
     struct {
         zeta_state_t *state;
         uint16_t user_addr;
+        const uint8_t *src;
         size_t len;
     } *ctx = arg;
-    uint16_t i;
 
-    for (i = 0; i < ctx->len; i++) {
-        zeta_write_visible(ctx->state, ctx->user_addr + (uint16_t)i,
-                           g_copy_staging[i]);
-    }
+    /* One LDIR instead of one zeta_write_visible() call per byte.
+     *
+     * The byte loop was correct and it was also the whole of the exec
+     * regression: muzix_boot_copy_kernel_to_user() stages a chunk here and
+     * writes it one byte at a time, each byte a call that redoes the visible
+     * address arithmetic, and loading a 6.7 KiB shell took the boot from ~4
+     * seconds to ~11.  The staged words and muzix_zeta_ldir_staged() are the
+     * house's own primitives (bank_io.s, the same ones the ROM-page copy
+     * above uses), and under this temp map window 2 is still the kernel's
+     * page, so &g_copy_staging and the destination window are both what they
+     * were for the byte loop.  The caller's checks still bound len to the
+     * staging buffer and to one window.
+     *
+     * ctx->src is g_copy_staging, OR the caller's own buffer when that buffer
+     * survives the map switch - see zeta_copy_kernel_to_user(): the source
+     * window is checked there so the copy can ldir straight out of it instead
+     * of making a second copy first.  Both ends are reachable under this temp
+     * map, because the one window it replaces is window 1 and a direct-path
+     * source is never in it. */
+    muzix_zeta_staged_src = (uint16_t)(uintptr_t)ctx->src;
+    muzix_zeta_staged_dst = ctx->user_addr;
+    muzix_zeta_staged_len = (uint16_t)ctx->len;
+    muzix_zeta_ldir_staged();
     return 0;
 }
 
@@ -540,30 +580,83 @@ int zeta_copy_kernel_to_user(zeta_state_t *state,
      * whatever dst_map said.  src_vir/dst_vir is caller-supplied, so the only
      * safe answer to a region-0 request is to refuse it. */
     if (region == 0) {
-        muzix_trace_write(ZETA_TRACE_WINDOW0);
         return -1;
     }
     /* Staging into the process's own page 3 would overwrite the kernel buffer
      * the data came from, and the callback frame would live there too. */
     if (region == 3) {
-        muzix_trace_write(ZETA_TRACE_WINDOW3);
         return -1;
     }
 
     /* Stage before the switch: while window 3 still maps kernel page 0x23 both
-     * the source and the staging buffer are reachable. */
-    for (i = 0; i < len; i++) {
-        g_copy_staging[i] = src[i];
+     * the source and the staging buffer are reachable.
+     *
+     * Note that the staging buffer is in _DATA, which is in *window 2* - _DATA
+     * is derived from the extent of _CODE, so it sits just below 0xA000.  A
+     * transfer whose destination is region 2 therefore cannot switch window 2:
+     * the callback above would read g_copy_staging back as the process's page.
+     * The destination page is mapped into window 1 instead and written at
+     * 0x4000 + offset, which is the same physical page.
+     *
+     * WHICH IS ALSO WHY THE STAGING IS NOW CONDITIONAL.  The temp map below
+     * replaces ONE window, and that window is always window 1: a region-2
+     * destination is remapped into window 1 (above), a region-1 destination
+     * IS window 1, and regions 0 and 3 are refused.  Windows 0, 2 and 3 keep
+     * the pages muzix_live_banks records - the map installed when the call
+     * arrived - so a source that lies entirely outside window 1 reads the
+     * same bytes either side of the switch and the staging loop bought
+     * nothing but a second copy of it.
+     *
+     * That second copy was the measurable part of the exec regression: the
+     * loop is a C byte copy at about thirty instructions per byte, and every
+     * 256-byte exec chunk paid it - 8.5k instructions for a copy whose ldir
+     * is a twentieth of that.  The exec loader's chunk buffer, the IPC reply
+     * buffer and the fork stack scratch all sit in _DATA (window 2), which is
+     * exactly the case that skips the loop: measured on 2026-10-14, the shell
+     * banner arrives 1.3M instructions earlier with this change in place.
+     *
+     * A source inside window 1 - or a range that straddles its boundary from
+     * window 0 - still stages, because the switch would swap the page out from
+     * under the read.  The test is deliberately written so that a window-0
+     * source that ENDS below 0x4000 takes the direct path and everything
+     * else does not: len is bounded by the staging size, so there is no
+     * overflow to compute around. */
+    uint8_t map_region = region;
+    uint16_t write_addr = user_addr;
+    if (region == 2) {
+        map_region = 1;
+        write_addr = (uint16_t)(0x4000 + (user_addr & (ZETA_BANK_SIZE - 1)));
+    }
+
+    uint16_t src_addr = (uint16_t)(uintptr_t)src;
+    const uint8_t *ldir_src;
+    if (src_addr >= 0x8000u) {
+        /* Entirely in windows 2 and 3, which survive the switch unchanged.
+         * A range that wraps past 0xFFFF stays inside those two windows, so
+         * the wrap needs no case of its own. */
+        ldir_src = src;
+    } else if (src_addr < ZETA_BANK_SIZE &&
+               len <= (size_t)(ZETA_BANK_SIZE - src_addr)) {
+        /* Entirely in window 0, likewise unchanged - and the subtraction is
+         * only evaluated here, where src_addr is known to be below 0x4000, so
+         * it cannot wrap. */
+        ldir_src = src;
+    } else {
+        for (i = 0; i < len; i++) {
+            g_copy_staging[i] = src[i];
+        }
+        ldir_src = &g_copy_staging[0];
     }
 
     process_map_t temp_map;
-    copy_temp_map(state, dst_map->pages[region], region, &temp_map);
+    copy_temp_map(state, dst_map->pages[region], map_region, &temp_map);
 
     struct {
         zeta_state_t *state;
         uint16_t user_addr;
+        const uint8_t *src;
         size_t len;
-    } ctx = { state, user_addr, len };
+    } ctx = { state, write_addr, ldir_src, len };
 
     return zeta_with_temp_map_impl(state, &temp_map,
                                    ZETA_CB_COPY_KERNEL_TO_USER, &ctx);
@@ -576,12 +669,16 @@ static int copy_user_to_kernel_callback(void *arg)
         uint16_t user_addr;
         size_t len;
     } *ctx = arg;
-    uint16_t i;
 
-    for (i = 0; i < ctx->len; i++) {
-        g_copy_staging[i] = zeta_read_visible(ctx->state,
-                                              ctx->user_addr + (uint16_t)i);
-    }
+    /* One LDIR, for the same reason and under the same windows as the
+     * kernel-to-user callback above: this is the read side of the same
+     * exchange (the exec argv copy-out from the child's stack goes through
+     * here), and a byte-at-a-time zeta_read_visible() per byte was charging
+     * the boot the same way. */
+    muzix_zeta_staged_src = ctx->user_addr;
+    muzix_zeta_staged_dst = (uint16_t)(uintptr_t)&g_copy_staging[0];
+    muzix_zeta_staged_len = (uint16_t)ctx->len;
+    muzix_zeta_ldir_staged();
     return 0;
 }
 
@@ -608,24 +705,33 @@ int zeta_copy_user_to_kernel(zeta_state_t *state,
      * to userspace as if it were the process's own memory.  See the matching
      * check in zeta_copy_kernel_to_user(). */
     if (region == 0) {
-        muzix_trace_write(ZETA_TRACE_WINDOW0);
         return -1;
     }
     /* Same window-3 rule as above: the callback would read the process's page
      * 3 and drop the result straight into the kernel's staging buffer. */
     if (region == 3) {
-        muzix_trace_write(ZETA_TRACE_WINDOW3);
         return -1;
     }
 
+    /* As in zeta_copy_kernel_to_user(): a region-2 source cannot be read by
+     * switching window 2, because g_copy_staging - which this callback writes
+     * and the caller then copies out of - lives in _DATA, which is in window 2.
+     * Map the process's page into window 1 and read it at 0x4000 + offset. */
+    uint8_t map_region = region;
+    uint16_t read_addr = user_addr;
+    if (region == 2) {
+        map_region = 1;
+        read_addr = (uint16_t)(0x4000 + (user_addr & (ZETA_BANK_SIZE - 1)));
+    }
+
     process_map_t temp_map;
-    copy_temp_map(state, src_map->pages[region], region, &temp_map);
+    copy_temp_map(state, src_map->pages[region], map_region, &temp_map);
 
     struct {
         zeta_state_t *state;
         uint16_t user_addr;
         size_t len;
-    } ctx = { state, user_addr, len };
+    } ctx = { state, read_addr, len };
 
     if (zeta_with_temp_map_impl(state, &temp_map,
                               ZETA_CB_COPY_USER_TO_KERNEL, &ctx) != 0) {

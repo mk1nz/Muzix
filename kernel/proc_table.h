@@ -10,7 +10,7 @@
 #include "../platform/zeta-v2/bank_io.h"
 #include "../platform/zeta-v2/context_switch.h"
 
-#define MUZIX_PROC_TABLE_MAX 4
+#define MUZIX_PROC_TABLE_MAX 8
 #define MUZIX_PROC_TASK_Q 0
 #define MUZIX_PROC_SERVER_Q 1
 #define MUZIX_PROC_USER_Q 2
@@ -138,6 +138,31 @@ typedef struct {
      * 546 seconds, and the charge subtracts rather than compares, so the wrap
      * is a non-event. */
     uint16_t tick_stamp;
+    /* THE OTHER MEANING OF THE STAMP, GIVEN ITS OWN FIELD.
+     *
+     * tick_stamp used to carry two jobs: the 120 Hz deadline park() writes and
+     * wake_expired() tests, and the accounting mark muzix_proc_table_charge()
+     * reads and re-stamps at syscall entry and exit.  They are the same field
+     * and different owners, and the intersection of their lifetimes is the
+     * bug: a charge on a PARKED slot re-stamps its deadline to `now`, the
+     * deadline expires immediately, and the slot is readied on the next
+     * scheduler pass - every pass, for ever.  Measured 2026-10-15 with a
+     * watchpoint on one server slot's stamp during an idle prompt: add_process_time
+     * wrote the tick counter into the parked slot's 0xFFFF deadline from a
+     * caller no return-address sample could name (the sample lands in
+     * g_saved_user_context, the switch scratch, not on a code stack), the
+     * slot round-robinned with the shell, and the keystroke that should have
+     * woken the reader in one tick waited out its 240-tick park instead.
+     *
+     * charge_stamp is the accounting mark and nothing else.  tick_stamp stays
+     * the deadline, written by park() and tested by wake_expired(), and is now
+     * touched by no code path that runs while the slot is parked - which is
+     * the whole fix: not "do not charge a parked slot", a rule every future
+     * call site would have to remember, but two fields so the two meanings
+     * cannot collide. */
+    uint16_t charge_stamp;
+    uint8_t server_id;
+    uint8_t ipc_client;  /* Current IPC client (sender of last received message) */
 } muzix_proc_slot_t;
 
 /* The front of a slot is handed to userspace as a struct proc_info, so every
@@ -254,10 +279,17 @@ void muzix_proc_set_accounted(muzix_proc_slot_t *slot);
  * `halt` inside a bounded wait is billed as system time and a machine standing
  * still reports 100% busy.  This stamps the charge on both sides of the halt, so
  * only executed time is accumulated.  It is a no-op if no system call is in
- * flight, which keeps an early-boot halt from touching a slot nothing is charging.
+ * flight, which keeps an early boot halt from touching a slot nothing is charging.
  *
- * For a caller that is NOT inside a system call - the scheduler's own idle step -
- * there is nothing to charge and z80_halt() is the right call directly. */
+ * THE SCHEDULER'S OWN IDLE HALT IS A CALLER TOO, and deliberately so.  The halt
+ * that ends a park is taken with a system call in flight, and without it that
+ * interval lands in the parked process's STIME - the processor was stopped, so
+ * charging it as work is a machine at rest reporting itself busy.  The pointer it
+ * stamps is the slot of the last process that made a system call and is not
+ * cleared when that call ends, so on an idle halt it may name a slot that is not
+ * the one that was running; proc_table.c's comment on the function states what
+ * that costs, and it is bounded by the machine already being in a state where
+ * that slot cannot be dispatched. */
 void muzix_proc_halt_uncounted(void);
 int muzix_proc_table_fork(muzix_kernel_proc_table_t *table,
                           int parent_slot,

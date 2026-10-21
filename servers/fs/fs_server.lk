@@ -1,0 +1,20 @@
+-m
+-y
+-w
+-b _CODE=0x8000
+-i fs_server.ihx
+fs_server.rel
+fs_clock.rel
+../../fs/tty_device.rel
+../../zeta_uart_io.rel
+../../zeta_bank_io.rel
+../../z80_io.rel
+../../kernel_bank_model.rel
+../../bitmap_ops.rel
+../../lib/server_crt0.rel
+../../lib/math.rel
+../../lib/sdcc_runtime.rel
+../../lib/libc.rel
+../../lib/syscall.rel
+../../lib/user_syscall.rel
+../../lib/server.rel

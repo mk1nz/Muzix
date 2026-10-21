@@ -170,37 +170,88 @@ void muzix_load_note_halted(uint16_t counts)
 
 /* (a * b) >> 14, in Q14, with no 32-bit arithmetic anywhere.
  *
- *   a*b = ah*bh*65536 + (ah*bl + al*bh)*256 + al*bl
+ * RE-DERIVED FROM THE FOUR PARTIAL PRODUCTS, FROM SCRATCH
+ * ------------------------------------------------------
+ * Cut both operands into bytes:  a = ah*256 + al,  b = bh*256 + bl.  Then
  *
- * Every PARTIAL product is at most 65025 and fits in 16 bits; only the
- * recombination is wider, and it is done with carries in 16.  sum = p1 + p2 CAN
- * exceed 65535 - both are up to 65025, because the OPERANDS are limited to Q14
- * but the halves they are cut into are full bytes - and the carry's weight in the
- * high half is 65536 >> 8 = 256, not 1.  Both of those were wrong here before
- * they were caught, on 7 and then 93 of 225 operand pairs; the comment keeps
- * them because the next person will otherwise make them again.
+ *     p0 = al*bl   weight 2^0
+ *     p1 = ah*bl   weight 2^8
+ *     p2 = al*bh   weight 2^8
+ *     p3 = ah*bh   weight 2^16
+ *
+ *     a*b = p0 + (p1 + p2)*2^8 + p3*2^16
+ *
+ * Every p is at most 255*255 = 65025, so each fits in 16 bits and SDCC expands
+ * it inline as a shift-add; a uint16_t*uint16_t instead emits a call to
+ * __mulint, which this kernel cannot link (AGENTS.md, "The kernel holds no
+ * 32-bit multiply").  The product itself is 32 bits and never exists as one:
+ * it is carried as the two 16-bit halves `low` and `high` below.
+ *
+ * THE 17-BIT MIDDLE SUM, AND WHY ITS CARRY WEIGHS 256
+ * ---------------------------------------------------
+ * p1 + p2 reaches 65025 + 65025 = 130050, which does not fit in 16 bits, so
+ * split it into a 16-bit part and a carry-out:
+ *
+ *     p1 + p2 = 65536*C + S,   S = (p1 + p2) & 0xFFFF,   C = carry out (0 or 1)
+ *
+ * Substituting, and grouping by what lands in the low 16 bits of the product
+ * and what lands above them:
+ *
+ *     a*b = p0 + S*2^8 + C*2^24 + p3*2^16
+ *         = (p0 + (S & 0xFF)*2^8)  +  ((S >> 8) + C*256 + p3)*2^16
+ *
+ * Two things fall out of that grouping, and both were got wrong here before
+ * they were caught:
+ *
+ *   1. The carry C out of the 17-bit sum enters the HIGH half with weight
+ *      2^24 / 2^16 = 256.  Writing `+ 1` there is a 256-fold error, and it is
+ *      the mistake AGENTS.md records (7 of 225 operand pairs, then 93 of 225).
+ *      `carry << 8` IS that 256, and it is the whole reason the shift is there.
+ *   2. The high half can itself overflow: (S >> 8) + C*256 + p3 reaches
+ *      255 + 256 + 65025 = 65536.  It cannot in fact, because the whole
+ *      product is at most 65535*65535 = 0xFFFE0001, so a*b >> 16 is at most
+ *      0xFFFE = 65534 and the sum above is bounded by the product's own top
+ *      half.  The bound is worth stating rather than trusting: it is what
+ *      makes the additions below 16-bit instead of needing a 17-bit piece.
+ *
+ * THE CARRY OUT OF THE LOW HALF
+ * -----------------------------
+ * p0 + (S & 0xFF)*2^8 can itself exceed 65535, and that carry is detected the
+ * only way it can be without a wider add: `t < p0` after `t = low + p0`, which
+ * is true exactly when the addition wrapped.  Note it is compared against p0
+ * and not against `low` - `low + p0 >= 65536` implies `t = low + p0 - 65536 <
+ * p0`, and the converse holds too, so the comparison is exact.
+ *
+ * WHAT THE 16-BIT RETURN CAN AND CANNOT HOLD
+ * ------------------------------------------
+ * The result is bits 14 and above of the 32-bit product: `(high << 2) |
+ * (low >> 14)`.  For Q14 operands - the production range, where a, b <= 16384
+ * and (a*b) >> 14 <= 16384 - that is exact and complete.  Above Q14 the true
+ * value needs 18 bits (65535*65535 >> 14 = 262136) and the cast to uint16_t
+ * keeps its low 16; that is the documented behaviour of the return type rather
+ * than a second defect, and kernel/test_load.c asserts it exactly that way.
  */
-static uint16_t load_mul(uint16_t a, uint16_t b)
+uint16_t muzix_load_mul(uint16_t a, uint16_t b)
 {
-    uint8_t ah = (uint8_t)(a >> 8);
     uint8_t al = (uint8_t)(a & 0xFFu);
-    uint8_t bh = (uint8_t)(b >> 8);
+    uint8_t ah = (uint8_t)(a >> 8);
     uint8_t bl = (uint8_t)(b & 0xFFu);
+    uint8_t bh = (uint8_t)(b >> 8);
     uint16_t p0 = (uint16_t)(al * bl);
     uint16_t p1 = (uint16_t)(ah * bl);
     uint16_t p2 = (uint16_t)(al * bh);
     uint16_t p3 = (uint16_t)(ah * bh);
-    uint16_t sum = (uint16_t)(p1 + p2);
-    uint16_t carry = (sum < p1) ? 1u : 0u;
-    uint16_t low = (uint16_t)(sum << 8);
-    uint16_t high = (uint16_t)((sum >> 8) + (uint16_t)(carry << 8));
+    /* The 17-bit middle sum, as a 16-bit low part plus its carry. */
+    uint16_t mid = (uint16_t)(p1 + p2);
+    uint16_t carry = (mid < p1) ? 1u : 0u;
+    /* bits 0..15 of the product, and bits 16..31 of it. */
+    uint16_t low = (uint16_t)(mid << 8);
+    uint16_t high = (uint16_t)((mid >> 8) + (uint16_t)(carry << 8));
+    uint16_t t;
 
-    {
-        uint16_t t = (uint16_t)(low + p0);
-
-        high = (uint16_t)(high + ((t < p0) ? 1u : 0u));
-        low = t;
-    }
+    t = (uint16_t)(low + p0);
+    high = (uint16_t)(high + ((t < p0) ? 1u : 0u));
+    low = t;
     high = (uint16_t)(high + p3);
 
     return (uint16_t)((high << 2) | (low >> 14));
@@ -423,13 +474,13 @@ void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks)
     while (exp != 0) {
         if ((exp & 1u) != 0) {
             for (i = 0; i < 3; i++) {
-                d[i] = load_mul((uint16_t)d[i], (uint16_t)f[i]);
+                d[i] = muzix_load_mul((uint16_t)d[i], (uint16_t)f[i]);
             }
         }
         exp = (uint16_t)(exp >> 1);
         if (exp != 0) {              /* the last squaring feeds nothing */
             for (i = 0; i < 3; i++) {
-                f[i] = load_mul((uint16_t)f[i], (uint16_t)f[i]);
+                f[i] = muzix_load_mul((uint16_t)f[i], (uint16_t)f[i]);
             }
         }
     }
@@ -451,8 +502,8 @@ void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks)
      * kernel/test_load.c case 3 is what caught it, by checking that the short
      * window ends up BELOW the long one after an idle interval. */
     for (i = 0; i < 3; i++) {
-        uint32_t keep = load_mul((uint16_t)g_load[i], (uint16_t)d[i]);
-        uint32_t take = load_mul((uint16_t)busy,
+        uint32_t keep = muzix_load_mul((uint16_t)g_load[i], (uint16_t)d[i]);
+        uint32_t take = muzix_load_mul((uint16_t)busy,
                                  (uint16_t)(LOAD_SCALE - d[i]));
 
         g_load[i] = keep + take;

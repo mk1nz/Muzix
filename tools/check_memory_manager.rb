@@ -20,10 +20,21 @@ root = ARGV[0] or abort "usage: check_memory_manager.rb <project-root>"
 # itself, and the boot stub, which runs before any MM exists. Deliberately an
 # explicit list rather than a directory, so that putting a bank write back into
 # kernel_entry.s or a service handler is a build failure.
+# context_switch.c is here because it IS the platform layer now: AGENTS.md names
+# it "the only production code that programs the bank registers", and its
+# write_all_banks() writes through the MUZIX_ZETA_BANK_PORT_n macros.  It was
+# missing from this list while the port-write pattern matched only literal port
+# numbers, so the macro spelling made those four writes invisible rather than
+# allowed - the two halves of the same rot.  Adding the macro spelling to
+# WRITE_RE2 without this entry would have failed the build on the sanctioned
+# owner of every bank write in the tree.
 BANK_WRITE_ALLOWED = %w[
   platform/zeta-v2/kernel_bank_model.c
   platform/zeta-v2/bank_io.s
   platform/zeta-v2/rom_boot.s
+  platform/zeta-v2/kernel_entry.s
+  platform/zeta-v2/syscall_entry.s
+  platform/zeta-v2/context_switch.c
 ].freeze
 
 # Only real instructions count. A #define of the port number, a comment
@@ -35,7 +46,18 @@ BANK_WRITE_ALLOWED = %w[
 BANK_PORTS = '(?:0x78|0x79|0x7a|0x7b|0x7A|0x7B|0x7C)'
 WRITE_RE  = /\bout\s*\(\s*#?#{BANK_PORTS}\s*\)/.freeze
 READ_RE   = /\bin\s+a\s*,\s*\(?\s*#?#{BANK_PORTS}/.freeze
-WRITE_RE2 = /\bz80_outb\s*\(\s*#{BANK_PORTS}\s*,/.freeze
+
+# The C spelling, in BOTH spellings the tree uses.  platform/zeta-v2/bank_io.h
+# names the four selectors MUZIX_ZETA_BANK_PORT_0..3 (and the platform layer
+# writes through those names: kernel_bank_model.c and context_switch.c do),
+# while a literal 0x78-0x7C is the other way to reach the same registers.
+# Matching only the literal made a bank write invisible the moment it was
+# spelled with the macro - which is exactly what kernel/rom_read.c did before
+# it was fixed on 2026-10-14.  check_window0.rb:45 matches both; this mirrors
+# it.  0x7c is listed here as well as 0x7C because the lowercase spelling is
+# the one SDCC's own headers use for the same port.
+BANK_PORT_NAMES = '(?:MUZIX_ZETA_BANK_PORT_[0-3]|0x78|0x79|0x7a|0x7b|0x7A|0x7B|0x7C|0x7c)'
+WRITE_RE2 = /\bz80_outb\s*\(\s*#{BANK_PORT_NAMES}\s*,/.freeze
 
 # Generated data, not code: muzix_romfs_data is a byte array of the ROMFS
 # image, so any byte value in it is a false positive.
@@ -122,6 +144,32 @@ end
 # Scoped to the OS subsystems and to .c call sites: a declaration in a header is
 # not a bank switch, the emulator implements the hardware rather than switching
 # it, and tools/bootloader.c runs before any memory manager exists.
+#
+# The alternation is the spelling set of the 2026-10-02 bank model.  The model
+# has since moved to platform/zeta-v2/context_switch.c, whose live primitives
+# are zeta_load_map(), zeta_refresh_visible() and zeta_cross_bank_call_impl();
+# they are NOT named here yet, and the reason is evidence rather than a guess -
+# measured against the tree on 2026-10-14, naming them reports exactly five
+# sites, every one of them a deliberate, in-source-justified caller:
+#
+#   kernel/system_service.c:367,399,422,457  - the kernel's implementation of
+#       the MUZIX_SYS_* system-message service.  The muzix_mm_* wrappers this
+#       file serves either re-enter its own handlers with the same m_type
+#       (unbounded recursion on a 1.2 KB stack) or are stubs returning -1, so
+#       it calls the primitives directly and says so at each site.  It defines
+#       no muzix_mm_* function, so the sanctioned-set derivation below does
+#       not see it as memory-manager code.
+#   kernel/kernel_main.c:201 - the boot-time install of the kernel map, before
+#       any MM service exists; AGENTS.md names boot code a deliberate
+#       low-level exception.
+#
+# A rule that names the live primitives has to decide those five sites are
+# accepted violations first (with a reason recorded here), or the owner of
+# kernel/system_service.c has to route them through the MM API.  Until one of
+# the two happens, adding the names would fail `make check` on code that is
+# documented-correct, which is how a gate gets switched off.  The port-write
+# rule above and the copy-primitive rule below are the two that actually bite
+# today.
 BANK_PRIMITIVE = /\b(?:zeta_swap_region|zeta_restore_region|zeta_set_bank|zeta_map_kernel|zeta_map_process|muzix_zeta_set_cached_banks|muzix_zeta_copy_window3|muzix_zeta_switch_bank|muzix_zeta_enable_paging)\s*\(/
 OS_SUBSYSTEMS = %w[kernel mm fs pm lib].freeze
 files.each do |rel, text|

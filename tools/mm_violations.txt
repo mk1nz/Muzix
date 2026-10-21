@@ -1,0 +1,10 @@
+# Baselined violations of the memory-manager rule. Every entry used to name a
+# real site in the sources; the ratchet fails the build on a NEW one and this
+# file removes the known ones. 2026-10-14 sweep: all four old entries are gone
+# and match no current source line, so the file is intentionally empty:
+#   1. rom_read.c's direct zeta_copy_kernel_to_user() now routes through
+#      muzix_mm_copy_kernel_to_map() (mm/mm_copy.c) - the violation was fixed.
+#   2-4. The `out (#0x79/7a/7b), a` spellings predate the move of every bank
+#      write into platform/zeta-v2/context_switch.c and bank_io.s, which the
+#      gate does not scan anyway.  Keep this file empty unless a NEW violation
+#      is deliberately accepted - and say why here.

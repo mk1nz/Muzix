@@ -18,6 +18,19 @@ struct dirent {
 	char name[15];
 };
 
+/* stat structure - matches kernel's muzix_fs_inode_t */
+struct stat {
+    uint16_t st_mode;
+    uint16_t st_uid;
+    uint32_t st_size;
+    uint16_t st_gid;
+    uint8_t  st_links;
+    uint16_t st_zone[7];
+    uint16_t st_indirect_zone;
+    uint8_t  st_used;
+    uint8_t  st_pad[3];
+};
+
 /*
  * Calendar time, as read from and written to the on-board DS1302.
  *
@@ -61,6 +74,11 @@ struct rtc_time {
 
 /* Standard I/O */
 int putchar(int c);
+
+/* Hand any buffered stdout to the kernel now.  putchar() flushes on a newline;
+ * this is for output without one - the prompt - so it reaches the console
+ * before the program blocks on input. */
+void muzix_stdout_flush_now(void);
 int getchar(void);
 void puts(const char *str);
 void printf(const char *fmt, ...);
@@ -68,6 +86,7 @@ void printf(const char *fmt, ...);
 /* String functions */
 char *strcpy(char *dest, const char *src);
 char *strncpy(char *dest, const char *src, size_t n);
+char *strrchr(const char *s, int c);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);
 size_t strlen(const char *s);

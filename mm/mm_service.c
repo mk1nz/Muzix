@@ -21,7 +21,13 @@ void muzix_mm_service_init(muzix_mm_service_t *mm,
 
 int muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page)
 {
-    if (!mm || !mm->system_task || !page) {
+    if (!mm) {
+        return -1;
+    }
+    if (mm->system_task == 0) {
+        return -1;
+    }
+    if (!page) {
         return -1;
     }
     return zeta_memory_alloc_page(page);

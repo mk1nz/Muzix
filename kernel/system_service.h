@@ -44,20 +44,5 @@ typedef struct {
 
 void muzix_system_service_init(muzix_system_service_t *svc, void *loop);
 int muzix_system_service_dispatch(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_fork(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_newmap(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_exec(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_xit(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_getsp(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_times(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_abort(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_sig(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_copy(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-
-int muzix_system_service_load_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_load_kernel_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-
-int muzix_system_service_cross_bank_call(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-void muzix_system_service_refresh_visible(muzix_system_service_t *svc, const muzix_system_message_t *msg);
 
 #endif

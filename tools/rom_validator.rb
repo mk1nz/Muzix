@@ -17,39 +17,115 @@ MINIX_MAGIC = 0x137f
 # Every file the ROM is supposed to carry, checked for the size its inode
 # claims and for its data being present at all.
 #
-# The Makefile's make_minixfs.rb call puts twelve files in the image - readme,
-# hw-notes, copy-notes, echo, cat, ls, date, top, uptime, loadavg, hwdiag,
-# shell - and the directory in the built ROM holds all twelve,
+# The Makefile's make_minixfs.rb call puts files in the image - readme.txt,
+# hw-notes.txt, copy-notes.txt, echo, cat, ls, date, top, uptime, loadavg, hwdiag,
+# z80test, shell, fs_server, mm_server, pm_server - and the directories
+# holds all fifteen,
 # but the loop below walks EXPECTED_FILES and not the directory, so a truncated
 # or misplaced user command, which
 # is exactly the failure a filesystem running out of room produces, must not
 # pass validation silently.
 #
+# The three servers were added to the Makefile's make_minixfs.rb invocation when
+# the FS/MM/PM servers moved out of the kernel, and this list was not widened
+# with it: it stayed at twelve names, so a server blob that was missing or
+# truncated failed in the emulator at boot with no size check disagreeing.  The
+# server names are the ones most easily forgotten again - keep this list in
+# step with that invocation.
+#
 # The directory is read once into name_to_inode below and is a better source of
 # truth than any hand-kept list, so the check that a file is PRESENT is
 # unaffected by this - it was the per-file data and MZ checks that had the
 # expected-file data coverage.
-EXPECTED_FILES = %w[
-  echo
-  cat
-  ls
-  date
-  top
-  uptime
-  loadavg
-  hwdiag
-  shell
-  readme
-  hw-notes
-  copy-notes
+#
+# Files are stored in / (root for docs), /bin and /sbin subdirectories. Each entry is
+# [name, path] where path is the full filesystem path.
+EXPECTED_FILES = [
+  ["echo",      "/bin/echo"],
+  ["cat",       "/bin/cat"],
+  ["ls",        "/bin/ls"],
+  ["date",      "/bin/date"],
+  ["top",       "/bin/top"],
+  ["uptime",    "/bin/uptime"],
+  ["loadavg",   "/bin/loadavg"],
+  ["hwdiag",    "/bin/hwdiag"],
+  ["readme",    "/readme.txt"],
+  ["hw-notes",  "/hw-notes.txt"],
+  ["copy-notes","/copy-notes.txt"],
+  ["z80test",   "/bin/z80test"],
+  [nil,         "/"],            # root directory
+  [nil,         "/bin"],           # directory itself
+  ["shell",     "/sbin/shell"],
+  ["fs_server", "/sbin/fs_server"],
+  ["mm_server", "/sbin/mm_server"],
+  ["pm_server", "/sbin/pm_server"],
+  [nil,         "/sbin"]           # directory itself
 ]
 
-# Files that are MZ executables and must therefore start with 0x4D 0x5A.  This
-# was four names long and had the same three missing: date, top and uptime are
-# built by the same add_exec_header.rb pass as the rest and carry the same
-# header, and a program whose header was wrong would have been exec'd
-# unverified.
-BINARY_FILES = %w[echo cat ls date top uptime loadavg hwdiag shell]
+# Files that are MZ executables and must therefore start with 0x4D 0x5A.  The
+# same files carry the same MZ header and are checked for it here - an exec
+# header missing from a userspace binary is the difference between a program
+# the loader runs and a blob it refuses at exec.
+BINARY_FILES = %w[
+  echo cat ls date top uptime loadavg hwdiag z80test
+  shell fs_server mm_server pm_server
+]
+
+# Resolve a path like /bin/ls or /sbin/fs_server in the MINIX filesystem.
+# Returns [inode_num, size, mode, zone0] or nil if not found.
+def resolve_path(rom, fs_start, inode_table_offset, ninodes, path)
+  # Parse path components
+  components = path.split('/').reject { |c| c.empty? }
+  current_inode = 1  # ROOT_INODE
+
+  components.each_with_index do |comp, idx|
+    is_last = (idx == components.length - 1)
+    comp_len = comp.length
+
+    # Read the inode for current directory
+    inode_off = inode_table_offset + current_inode * 32
+    return nil if inode_off + 31 >= rom.bytesize
+
+    mode = read_u16(rom, inode_off + 0)
+
+    # Get the data zone (directory block)
+    zone0 = read_u16(rom, inode_off + 14)
+    return nil if zone0 == 0
+
+    dir_offset = fs_start + zone0 * BLOCK_SIZE
+    return nil if dir_offset + BLOCK_SIZE > rom.bytesize
+
+    # Search directory entries for this component
+    found = false
+    (0..(BLOCK_SIZE / 16 - 1)).each do |i|
+      entry_off = dir_offset + i * 16
+      entry_inode = read_u16(rom, entry_off + 0)
+      break if entry_inode == 0
+
+      entry_name = rom[entry_off + 2, 14].delete("\0")
+      if entry_name == comp
+        current_inode = entry_inode
+        found = true
+        break
+      end
+    end
+
+    return nil unless found
+  end
+
+  # Get the final inode's info
+  inode_off = inode_table_offset + current_inode * 32
+  return nil if inode_off + 31 >= rom.bytesize
+
+  info = {
+    inode: current_inode,
+    mode: read_u16(rom, inode_off + 0),
+    size: read_u32(rom, inode_off + 4),
+    nlinks: rom[inode_off + 13].ord,
+    zone0: read_u16(rom, inode_off + 14)
+  }
+  info
+end
 
 def read_u16(buf, offset)
   buf[offset].ord | (buf[offset + 1].ord << 8)
@@ -129,108 +205,81 @@ def validate_rom(rom_path, verbose: false)
     errors << "Zone allocator truncated"
   end
 
-  # Inode table at block 3
+  # Inode table size depends on ninodes from superblock
+  inode_table_blocks = (ninodes * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE
   inode_table_offset = fs_start + 3 * BLOCK_SIZE
-  if inode_table_offset + BLOCK_SIZE <= rom.bytesize
-    puts "  Inode table: present" if verbose
+  if inode_table_offset + inode_table_blocks * BLOCK_SIZE <= rom.bytesize
+    puts "  Inode table: #{ninodes} inodes in #{inode_table_blocks} block(s)" if verbose
     
-    # Read directory entries to map names to inode numbers
-    dir_offset = fs_start + 4 * BLOCK_SIZE
-    name_to_inode = {}
-    if dir_offset + BLOCK_SIZE <= rom.bytesize
-      (0..(BLOCK_SIZE / 16 - 1)).each do |i|
-        entry_off = dir_offset + i * 16
-        inode = read_u16(rom, entry_off + 0)
-        break if inode == 0
-        name = rom[entry_off + 2, 14].delete("\0")
-        name_to_inode[name] = inode
-        puts "    Dir entry: inode=#{inode}, name='#{name}'" if verbose
-      end
-    end
-    
-    # Check each expected file has an inode
-    EXPECTED_FILES.each do |name|
-      inode_num = name_to_inode[name]
-      if inode_num.nil?
-        errors << "File '#{name}': not found in directory"
-        next
+     # Root directory follows inode table (inode table starts at block 3)
+      root_dir_block = 3 + inode_table_blocks
+      dir_offset = fs_start + root_dir_block * BLOCK_SIZE
+      
+      # Read root directory entries for verbose listing
+      if dir_offset + BLOCK_SIZE <= rom.bytesize
+        (0..(BLOCK_SIZE / 16 - 1)).each do |i|
+          entry_off = dir_offset + i * 16
+          inode = read_u16(rom, entry_off + 0)
+          break if inode == 0
+          name = rom[entry_off + 2, 14].delete("\0")
+          puts "    Dir entry: inode=#{inode}, name='#{name}'" if verbose
+        end
       end
       
-      if inode_table_offset + inode_num * 32 + 31 <= rom.bytesize
-        mode = read_u16(rom, inode_table_offset + inode_num * 32 + 0)
-        size = read_u32(rom, inode_table_offset + inode_num * 32 + 4)
-        nlinks = rom[inode_table_offset + inode_num * 32 + 10].ord
-        zone0 = read_u16(rom, inode_table_offset + inode_num * 32 + 11)
-        
-        if nlinks == 0
-          errors << "File '#{name}': inode #{inode_num} has 0 links (missing)"
-        elsif size == 0
-          warnings << "File '#{name}': size is 0 bytes"
-        else
-          puts "    ✓ #{name}: inode=#{inode_num}, size=#{size}, zone=#{zone0}, mode=0x#{mode.to_s(16)}" if verbose
+      # Check each expected file by resolving its full path
+      EXPECTED_FILES.each do |short_name, full_path|
+        info = resolve_path(rom, fs_start, inode_table_offset, ninodes, full_path)
+        if info.nil?
+          errors << "File '#{short_name}': not found at '#{full_path}'"
+          next
         end
-      else
-        errors << "File '#{name}': inode #{inode_num} truncated"
+        
+        if info[:nlinks] == 0
+          errors << "File '#{short_name}': inode #{info[:inode]} has 0 links (missing)"
+        elsif info[:size] == 0
+          warnings << "File '#{short_name}': size is 0 bytes"
+        else
+          puts "    ✓ #{short_name}: inode=#{info[:inode]}, size=#{info[:size]}, zone=#{info[:zone0]}, mode=0x#{info[:mode].to_s(16)}" if verbose
+        end
       end
-    end
   else
     errors << "Inode table truncated"
   end
 
-  # Root directory at block 4 - already checked above
-  dir_offset = fs_start + 4 * BLOCK_SIZE
-  if dir_offset + BLOCK_SIZE > rom.bytesize
-    errors << "Root directory truncated"
-  end
-
   # 5. Verify file data integrity
   puts "\n--- File Data Verification ---" if verbose
-  # Re-read directory to get name->inode mapping
-  name_to_inode = {}
-  dir_offset = fs_start + 4 * BLOCK_SIZE
-  if dir_offset + BLOCK_SIZE <= rom.bytesize
-    (0..(BLOCK_SIZE / 16 - 1)).each do |i|
-      entry_off = dir_offset + i * 16
-      inode = read_u16(rom, entry_off + 0)
-      break if inode == 0
-      name = rom[entry_off + 2, 14].delete("\0")
-      name_to_inode[name] = inode
-    end
-  end
   
-  EXPECTED_FILES.each do |name|
-    inode_num = name_to_inode[name]
-    if inode_num.nil?
-      errors << "File '#{name}': not found in directory"
+  EXPECTED_FILES.each do |short_name, full_path|
+    next if short_name.nil?  # Skip directory entries
+    info = resolve_path(rom, fs_start, inode_table_offset, ninodes, full_path)
+    if info.nil?
+      errors << "File '#{short_name}': not found at '#{full_path}'"
       next
     end
     
-    inode_off = inode_table_offset + inode_num * 32
-    if inode_off + 31 < rom.bytesize
-      size = read_u32(rom, inode_off + 4)
-      zone0 = read_u16(rom, inode_off + 11)
-      
-      if size > 0 && zone0 > 0
-        data_offset = fs_start + zone0 * BLOCK_SIZE
-        if data_offset + size <= rom.bytesize
-          file_data = rom[data_offset, size]
-          
-          # For binary files, check they have MZ header (0x4D 0x5A)
-          if BINARY_FILES.include?(name)
-            if file_data[0].ord == 0x4D && file_data[1].ord == 0x5A
-              puts "    ✓ #{name}: MZ header present, #{size} bytes" if verbose
-            else
-              errors << "File '#{name}': missing MZ header (got #{file_data[0,2].bytes.map { |b| sprintf('%02X', b) }.join(' ')})"
-            end
+    size = info[:size]
+    zone0 = info[:zone0]
+    
+    if size > 0 && zone0 > 0
+      data_offset = fs_start + zone0 * BLOCK_SIZE
+      if data_offset + size <= rom.bytesize
+        file_data = rom[data_offset, size]
+        
+        # For binary files, check they have MZ header (0x4D 0x5A)
+        if BINARY_FILES.include?(short_name)
+          if file_data[0].ord == 0x4D && file_data[1].ord == 0x5A
+            puts "    ✓ #{short_name}: MZ header present, #{size} bytes" if verbose
           else
-            puts "    ✓ #{name}: #{size} bytes" if verbose
+            errors << "File '#{short_name}': missing MZ header (got #{file_data[0,2].bytes.map { |b| sprintf('%02X', b) }.join(' ')})"
           end
         else
-          errors << "File '#{name}': data truncated (need #{size} bytes at 0x#{data_offset.to_s(16)})"
+          puts "    ✓ #{short_name}: #{size} bytes" if verbose
         end
-      elsif size > 0
-        errors << "File '#{name}': size=#{size} but zone0=#{zone0}"
+      else
+        errors << "File '#{short_name}': data truncated (need #{size} bytes at 0x#{data_offset.to_s(16)})"
       end
+    elsif size > 0
+      errors << "File '#{short_name}': size=#{size} but zone0=#{zone0}"
     end
   end
 

@@ -145,7 +145,7 @@ struct proc_info {
 /* How many slots there are to ask about.  A program walks this many and skips
  * what comes back inactive; kernel/proc_table.h checks it against the real
  * table size at compile time. */
-#define MUZIX_PROC_INFO_SLOTS 4
+#define MUZIX_PROC_INFO_SLOTS 8
 
 /* The single transfer this struct needs.  The MM refuses a copy longer than its
  * staging buffer rather than splitting it, so this has to stay well under

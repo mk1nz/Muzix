@@ -2,6 +2,7 @@
 #define MUZIX_EXEC_LOADER_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "../mm/mm_service.h"
 #include "../platform/zeta-v2/rtc_ds1302.h"
@@ -23,6 +24,24 @@ extern muzix_exec_load_args_t g_muzix_exec_load_args;
 /* Load a userspace binary from the filesystem into the given process slot.
  * Returns 0 on success, -1 on failure. */
 int muzix_exec_load(void);
+
+/* Enable IPC mode for exec_loader (called after FS server is running) */
+void muzix_exec_enable_ipc(void);
+
+/* Choose the loader's file path for the next load: true = talk to the FS
+ * server over IPC, false = read the ROM filesystem image directly.
+ *
+ * The SYS_EXEC handler forces the ROM path, because every executable this
+ * tree ships lives in the ROM-backed minifs image and the ROM path is the
+ * one the boot-time load of the shell exercises.  The IPC path is not usable
+ * from a syscall: exec_ipc_read() builds its message with m1_p1/m1_i2 while
+ * handle_read() reads the buffer from m1_p2 and the length from m1_i3 - the
+ * same field mix-up shell/shell.c's ipc_read() had - so every read came back
+ * zero bytes and the load failed at 'G'; and the destination it names is a
+ * kernel buffer, which the FS's server-to-client copy would resolve in the
+ * EXEC'ING process's map, not the kernel's.  Fixing that pair is a job of
+ * its own; until then the ROM path is the correct one, not a shortcut. */
+void muzix_exec_set_ipc_mode(bool use_ipc);
 
 /* The form the syscall layer calls: same load, but the target slot is an
  * argument rather than whatever boot left in the global block. This is what

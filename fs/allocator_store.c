@@ -19,12 +19,14 @@ int muzix_fs_allocator_load(muzix_fs_block_cache_t *cache,
         return -1;
     }
     memcpy(allocator->used, &data[4], sizeof(allocator->used));
-    /* Everything below first_data_zone is metadata -- superblock, allocator,
-     * inode table, root directory -- and can never be handed to a file.  A
-     * bitmap that does not say so is not a bitmap this filesystem wrote: with
-     * the root directory unmarked, muzix_fs_zone_is_used(4) answered "free"
-     * and only muzix_fs_zone_alloc's start at first_data_zone kept block 4 from
-     * being allocated.  Refuse such a volume instead of trusting that. */
+    /* Everything below first_data_zone is metadata -- reserved, superblock,
+     * zone allocator, the two inode-table blocks and the root directory -- and
+     * can never be handed to a file.  A bitmap that does not say so is not a
+     * bitmap this filesystem wrote: with the root directory unmarked,
+     * muzix_fs_zone_is_used(5) answered "free" and only muzix_fs_zone_alloc's
+     * start at first_data_zone kept block 5 from being allocated.  Refuse such
+     * a volume instead of trusting that.  make_minixfs.rb marks the same range
+     * before it marks any data zone. */
     for (uint16_t zone = 0; zone < allocator->first_data_zone; zone++) {
         if (!muzix_fs_zone_is_used(allocator, zone)) {
             return -1;

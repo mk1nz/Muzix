@@ -335,11 +335,11 @@ static void z80pack_ctc_tick(z80pack_t* pack)
         /* Channel 1's period comes from z80pack_ctc_recompute(), which models
          * the board's chain rather than a CPU cycle timer.  See there for why
          * this is not the same thing. */
-        if (!pack->ctc_irq_enabled[ch] || pack->ctc_cycles_per_tick[ch] == 0) {
-            continue;
-        }
-        if ((pack->total_cycles - pack->ctc_last_fire_cycles[ch]) >= pack->ctc_cycles_per_tick[ch]) {
-            pack->ctc_last_fire_cycles[ch] = pack->total_cycles;
+         if (!pack->ctc_irq_enabled[ch] || pack->ctc_cycles_per_tick[ch] == 0) {
+             continue;
+         }
+         if ((pack->total_cycles - pack->ctc_last_fire_cycles[ch]) >= pack->ctc_cycles_per_tick[ch]) {
+             pack->ctc_last_fire_cycles[ch] = pack->total_cycles;
             /* IM2 vector byte on CTC daisy-chain, base programmed on CH0.
              * Z80 CTC channel vectors occupy 2-byte slots. */
             z80pack_raise_irq(pack, (uint8_t)(pack->ctc_vector_base + (uint8_t)(ch << 1)));
@@ -457,29 +457,32 @@ static void z80pack_z80_write_byte(void* userdata, uint16_t addr, uint8_t val)
     
     /* Check common memory region */
     if (addr >= Z80PACK_COMMON_BASE) {
+        /* common_mem is the one owner of 0xFC00-0xFFFF.  This branch used to
+         * also write visible_ram[addr], which is the line cppcheck's
+         * arrayIndexOutOfBoundsCond points at - and it is not a bound, the
+         * index is a uint16_t so it stops at 65535, it is that the write is
+         * pointless: nothing ever reads visible_ram in this range.  Reads of
+         * common memory go through common_mem alone (the read path above), and
+         * the visible_ram mirror of this range is rebuilt in full from
+         * common_mem by z80pack_update_visible_ram() and z80pack_update_bank().
+         * Two writers for one range is how the earlier "process page shows up
+         * in window 3" confusion started; one owner is the whole fix. */
         pack->common_mem[addr - Z80PACK_COMMON_BASE] = val;
-        pack->visible_ram[addr] = val;
         return;
     }
     
-    /* Memory-mapped console output for RomWBW (0xFFE0) */
-    if (addr == 0xFFE0) {
-        if (pack->verbose) {
-            fprintf(stderr, "[MEM OUT $FFE0] 0x%02X ('%c')\n", val, (val >= 32 && val < 127) ? val : '.');
-        }
-        if (pack->serial_send) {
-            pack->serial_send(val, pack->serial_userdata);
-        } else {
-            putchar_unlocked(val);
-            fflush(stdout);
-        }
-        pack->visible_ram[addr] = val;
-        return;
-    }
-    
+    /* A store into a window that maps ROM (pages 0x00-0x1F) or unmapped space
+     * (0x40+, which the platform model does not have) is silently dropped, the
+     * way the board drops it: "Writes to ROM-mapped addresses are silently
+     * dropped" (AGENTS.md).  This guard used to cover only the ROM half, so a
+     * write to a window mapped to e.g. page 0x55 landed in visible_ram and then
+     * vanished at the next bank change - the propagation at the bottom of this
+     * function covers RAM pages only, and z80pack_update_visible_ram_region()
+     * rebuilds an unmapped window as 0xFF.  The byte was neither stored nor
+     * reported; dropping it here matches the ROM case. */
     {
         uint8_t bank = z80pack_mapped_bank(pack, addr);
-        if (bank <= ZETA_ROM_PAGE_MAX) {
+        if (bank <= ZETA_ROM_PAGE_MAX || bank > ZETA_RAM_PAGE_MAX) {
             return;
         }
     }
@@ -1671,6 +1674,14 @@ void z80pack_set_watchw(z80pack_t* pack, uint16_t addr)
 void z80pack_set_verbose(z80pack_t* pack, bool enable)
 {
     if (pack) pack->verbose = enable;
+}
+
+/* Kernel trace request (-k / --kernel-trace).  The setter only records what
+ * main.c was asked for; the emulator's part of the handshake is the byte
+ * main.c writes into common memory after the reset, which the kernel reads. */
+void z80pack_set_kernel_trace(z80pack_t* pack, bool enable)
+{
+    if (pack) pack->kernel_trace = enable;
 }
 
 void z80pack_set_system(z80pack_t* pack, z80pack_system_t system)

@@ -31,12 +31,15 @@ typedef struct {
     uint16_t mode;
     uint16_t uid;
     uint32_t size;
-    uint16_t gid;
+    uint32_t mtime;
+    uint8_t gid;
     uint8_t links;
     uint16_t zone[MUZIX_FS_DIRECT_ZONES];
     uint16_t indirect_zone;
-    uint8_t used;
-    uint8_t pad[3];
+    union {
+        uint16_t double_indirect_zone; /* On-disk offset 30 (MINIX v1) */
+        uint8_t used;                  /* In-memory allocation flag (offsets 30-31) */
+    };
 } muzix_fs_inode_t;
 
 #endif

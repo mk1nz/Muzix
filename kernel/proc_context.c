@@ -10,13 +10,23 @@
 #include "../platform/zeta-v2/uart_io.h"
 
 /* Published to window-0 assembly, which reads them immediately before the map
- * changes.  Defined in kernel_main.c alongside the entry-point pair that
+ * changes.  Defined in kernel_entry.s alongside the entry-point pair that
  * muzix_zeta_enter_userspace() already uses. */
 extern uint16_t muzix_resume_pc;
 extern uint16_t muzix_resume_sp;
 extern uint16_t muzix_resume_ret;
 extern uint8_t muzix_resume_banks[4];
 extern uint16_t muzix_switch_pending;
+
+#ifdef __SDCC__
+#define READ_RESUME_PC() ({ uint16_t v; __asm ld hl, (_muzix_resume_pc) ld e,(hl) inc hl ld d,(hl) ld v+0,e ld v+1,d __endasm; v; })
+#define READ_RESUME_SP() ({ uint16_t v; __asm ld hl, (_muzix_resume_sp) ld e,(hl) inc hl ld d,(hl) ld v+0,e ld v+1,d __endasm; v; })
+#define SET_SWITCH_PENDING() __asm ld hl, (_muzix_switch_pending) ld (hl), #1 __endasm
+#else
+#define READ_RESUME_PC() muzix_resume_pc
+#define READ_RESUME_SP() muzix_resume_sp
+#define SET_SWITCH_PENDING() do { muzix_switch_pending = 1; } while(0)
+#endif
 
 int muzix_context_switch_to(muzix_kernel_proc_table_t *table, int slot)
 {
@@ -50,8 +60,14 @@ int muzix_context_switch_to(muzix_kernel_proc_table_t *table, int slot)
      * like one that worked for an hour.
      *
      * It has to be here: muzix_zeta_resume_from() does not come back, so there
-     * is no "after" to put it in. */
-    muzix_tick_stamp_store(&target->tick_stamp);
+     * is no "after" to put it in.
+     *
+     * charge_stamp, not tick_stamp: the dispatch is accounting, and the resumed
+     * slot's tick_stamp is its park deadline - which, if it has one, was just
+     * consumed by the wake that readied this slot, and if it does not must not
+     * be overwritten with `now`.  See muzix_proc_slot_t::charge_stamp for the
+     * measured history of the two sharing a field. */
+    muzix_tick_stamp_store(&target->charge_stamp);
 
     muzix_resume_pc = pc;
     muzix_resume_sp = sp;
@@ -72,7 +88,7 @@ int muzix_context_switch_to(muzix_kernel_proc_table_t *table, int slot)
 
     /* Set last. The trap tests this before acting on it, so a switch must not
      * be visible until everything it needs is already published. */
-    muzix_switch_pending = 1;
+    SET_SWITCH_PENDING();
     return 0;
 }
 
@@ -80,8 +96,11 @@ int muzix_context_save_current(muzix_kernel_proc_table_t *table,
                                int slot,
                                uint16_t retval)
 {
-    uint16_t pc = 0;
-    uint16_t sp = 0;
+    /* cppcheck-suppress uninitvar -- READ_RESUME_PC/SP fill their local in Z80
+     * inline asm (lines 22-23); the analyser does not model asm, so it reports
+     * a local that is in fact assigned by the instruction pair below. */
+    uint16_t pc = READ_RESUME_PC();
+    uint16_t sp = READ_RESUME_SP();
 
     if (!table || slot < 0 || slot >= MUZIX_PROC_TABLE_MAX) {
         return -1;
@@ -91,8 +110,6 @@ int muzix_context_save_current(muzix_kernel_proc_table_t *table,
      * these two cells on the way in - while window 1 still held the process's
      * own page, which is the only moment it can be read. Copy them onto the slot
      * now, tagged with the value this syscall is about to return. */
-    pc = muzix_resume_pc;
-    sp = muzix_resume_sp;
     muzix_proc_table_set_resume(table, slot, pc, sp, retval);
     return 0;
 }

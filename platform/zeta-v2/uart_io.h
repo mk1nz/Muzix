@@ -5,6 +5,13 @@
 
 void muzix_zeta_uart_init(void);
 
+/* Enable the 16550's receive-data interrupt (IER bit 0).  This MUST be called
+ * after muzix_tick_init(), never from or before _muzix_zeta_uart_init: the
+ * interrupt reaches the CPU through CTC channel 2 as a rising edge, and
+ * enabling the level before that counter is armed burns the edge - see the
+ * comment on the routine in uart_io.s. */
+void muzix_zeta_uart_rx_irq_enable(void);
+
 /* These three are implemented in assembly (uart_io.s) using the sdcccall(1)
  * register convention: param1 in A, param2 in DE, and the callee's ret pops
  * only the return address. Without sdcccall(1) here, SDCC passes both
@@ -31,5 +38,6 @@ uint8_t muzix_zeta_uart_recv(void *userdata) MUZIX_ZETA_SDCCCALL1;
 uint8_t muzix_zeta_uart_available(void *userdata) MUZIX_ZETA_SDCCCALL1;
 
 void muzix_zeta_enter_userspace(void);
+void muzix_zeta_resume_from(void);
 
 #endif

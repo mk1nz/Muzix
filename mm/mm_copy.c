@@ -1,6 +1,18 @@
 #include "mm_copy.h"
 #include "../kernel/kernel_loop.h"
 #include "../kernel/proc_table.h"
+#include "../platform/zeta-v2/context_switch.h"
+
+/*
+ * The kernel's live loop, published by kernel_main.c as `muzix_kernel_loop_t
+ * *g_loop_ptr = &g_loop;`.  kernel/mm_service.c reaches the same symbol with
+ * the same extern for its slot lookup, and the two must agree: a private
+ * pointer to a copy of the table would hand out maps for processes that are
+ * not running.
+ */
+extern muzix_kernel_loop_t *g_loop_ptr;
+extern zeta_state_t g_zeta_state;
+
 
 int muzix_mm_copy_maps(muzix_mm_service_t *mm,
                        const muzix_mproc_t *src_mp,
@@ -73,6 +85,126 @@ int muzix_mm_copy_maps(muzix_mm_service_t *mm,
     return MUZIX_COPY_OK;
 }
 
+/*
+ * Map-to-map copy by SLOT NUMBER rather than by mproc pointer.
+ *
+ * muzix_mm_copy_maps() above is the primitive that actually works - it stages
+ * through a kernel buffer, so neither process is asked to be the other's
+ * window - but it takes two muzix_mproc_t* derived from segment tables.  A
+ * syscall arriving from a server has two SLOT numbers and no segments, because
+ * a slot's whole address space is one map.
+ *
+ * So this resolves each slot to its map and hands both to the same primitive.
+ * It exists as its own entry point, and it defines an muzix_mm_* function,
+ * which is what makes it a memory-manager module for
+ * tools/check_memory_manager.rb - the same rule that refuses kernel/ipc.c.
+ * Putting the user-to-user copy here rather than in the kernel is not a
+ * concession, it is where the MM's mediation belongs: the copy crosses a bank
+ * boundary, so the code that may program the bank registers is the code that
+ * performs it.
+ */
+/*
+ * =====================================================================
+ * THE STAGING BUFFER IS A STACK LOCAL, AND IT MUST STAY ONE.
+ * =====================================================================
+ *
+ * This used to be a `static uint8_t g_user_copy_staging[256]` in this file's
+ * _DATA.  That is wrong, and the reason is a window trap rather than a bug:
+ *
+ *   _DATA starts at 0xA000, which is Z80 window 2.  The copy primitives
+ *   install a TEMPORARY map - zeta_copy_user_to_kernel() maps the source's
+ *   page into the window the source address falls in, and
+ *   zeta_copy_kernel_to_user() does the same for the destination.  Under
+ *   either temp map, window 2 can become a PROCESS page.
+ *
+ * So a staging buffer in _DATA is only reliably mapped while the kernel map is
+ * installed.  The moment the temp map lands on window 2, "kernel memory"
+ * resolves to the process's own text page: the two halves of the copy then
+ * exchange bytes with a process page, and the write half scribbles through a
+ * window that is not the buffer's.
+ *
+ * The symptom is not a clean failure.  The FS server's own text gets written
+ * through, so it resumes at a stack value and the machine executes garbage -
+ * "unknown ED opcode: F6 at PC=F6DC" and a screen of one repeated byte, which
+ * is what the eyes see when a copy transfers 68 bytes of a constant.
+ *
+ * A local array instead lands on the kernel's C stack, which is window 3
+ * ($C000-$FFFF).  Both primitives refuse region 3 outright - it is the
+ * kernel's own window - so no temp map can ever move it.  That is exactly why
+ * muzix_mm_copy_maps() has used a 256-byte local since it was written, and
+ * this function only broke by not copying that detail.
+ */
+int muzix_mm_copy_user_to_user(muzix_mm_service_t *mm,
+                               uint8_t src_proc,
+                               uint16_t src_vir,
+                               uint8_t dst_proc,
+                               uint16_t dst_vir,
+                               uint16_t bytes)
+{
+    uint8_t staging[256];
+    muzix_kernel_proc_table_t *table;
+    muzix_proc_slot_t *src_slot;
+    muzix_proc_slot_t *dst_slot;
+
+    if (!mm || bytes == 0 || bytes > sizeof(staging)) {
+        return -1;
+    }
+    if (src_proc >= MUZIX_PROC_TABLE_MAX || dst_proc >= MUZIX_PROC_TABLE_MAX) {
+        return -1;
+    }
+
+    table = &g_loop_ptr->system.startup.proc_table;
+    src_slot = &table->slots[src_proc];
+    dst_slot = &table->slots[dst_proc];
+
+    if (!src_slot->active || !dst_slot->active) {
+        return -1;
+    }
+
+    /*
+     * Resolve through slot->map - the map the scheduler actually installs -
+     * and NOT through muzix_mproc_to_zeta_map().  exec_loader USED to set the
+     * mproc segments to a single page - TEXT, DATA and STACK all pointing at
+     * the text page under the comment "Stack is in the same page as
+     * text/data (single-page userspace model)" - while the map the machine
+     * runs on carries a separate stack page in window 1 and the text in
+     * window 2 (the boot trace's banks `20 2B 2A 23`).
+     * muzix_mproc_to_zeta_map() turned that stale single page into both
+     * windows, so a copy aimed at the client's stack read the TEXT page
+     * instead: plausible addresses, right length, wrong bytes.  exec_loader
+     * now stamps the STACK segment with the real stack page, but slot->map
+     * stays the authority: it is the map the context switcher installs.
+     *
+     * kernel/mm_service.c resolves from slot->map for this reason.
+     *
+     * THE STATE PASSED IS THE SCHEDULER'S, NOT mm->zeta.
+     *
+     * map_call_impl() restores the map it saved through `state->bank_reg`, not
+     * through the live bank registers the syscall trap writes directly.  So the
+     * state handed to the primitives must be the one the context switcher
+     * keeps in step - g_zeta_state, which write_all_banks() updates - or the
+     * copy restores whatever that structure happened to hold when it was
+     * initialised.  muzix_mm_service_init() calls zeta_init(), which leaves
+     * bank_reg as the KERNEL map; mm->zeta is therefore guaranteed stale for a
+     * copy issued on behalf of a running server, and the map left installed
+     * after the copy is the kernel's, not the server's.
+     *
+     * context_switch.c says as much at the window-3 check: "it is the current
+     * map, not state->bank_reg[], which the syscall trap does not update - it
+     * writes the ports directly."  The primitives already read muzix_live_banks
+     * for the windows they keep; it is the restore that is left holding the
+     * stale copy.
+     */
+    if (zeta_copy_user_to_kernel(&g_zeta_state, &src_slot->map, src_vir,
+                                 staging, bytes) != 0) {
+        return -1;
+    }
+    if (zeta_copy_kernel_to_user(&g_zeta_state, &dst_slot->map, dst_vir,
+                                 staging, bytes) != 0) {
+        return -1;
+    }
+    return 0;
+}
 int muzix_mm_copy_kernel_to_map(muzix_mm_service_t *mm,
                                 const process_map_t *map,
                                 uint16_t vir,
@@ -85,7 +217,15 @@ int muzix_mm_copy_kernel_to_map(muzix_mm_service_t *mm,
     if (!mm) {
         return -1;
     }
-    return zeta_copy_kernel_to_user(&mm->zeta, map, vir,
+    /* The scheduler's state, not mm->zeta.  muzix_mm_copy_user_to_user() above
+     * spells out why: zeta_init() leaves mm->zeta->bank_reg holding the kernel
+     * map, the primitives restore the map they saved through state->bank_reg,
+     * and a copy issued on behalf of a running process would restore the
+     * kernel's map into the middle of that process.  These two entries had kept
+     * the stale spelling, so every delivery the routed-syscall path made - the
+     * kernel's message to a server's receive buffer - ended with the wrong map
+     * installed and the wrong bytes through the window. */
+    return zeta_copy_kernel_to_user(&g_zeta_state, map, vir,
                                     (const uint8_t *)buf, (size_t)len);
 }
 
@@ -103,7 +243,7 @@ int muzix_mm_copy_map_to_kernel(muzix_mm_service_t *mm,
     if (!mm) {
         return -1;
     }
-    return zeta_copy_user_to_kernel(&mm->zeta, map, vir, (uint8_t *)buf,
+    return zeta_copy_user_to_kernel(&g_zeta_state, map, vir, (uint8_t *)buf,
                                     (size_t)len);
 }
 
@@ -192,13 +332,29 @@ int muzix_mm_handle_copy_page_to_kernel(muzix_system_service_t *svc,
     }
 
     mm = loop->mm;
+    if (!mm) {
+        return MUZIX_SYS_SERVICE_ERR;
+    }
     region = (uint8_t)msg->proc1;
     page = (uint8_t)msg->proc2;
     offset = msg->src_vir;
     dst = (void *)(uintptr_t)msg->dst_vir;
     len = msg->byte_count;
 
-    if (!dst || region > 3 || len > 0x4000) {
+    /* Three checks the two siblings make and this one did not, and the third
+     * is not the belt to the second's braces:
+     *
+     * page > 0x3F is refused here rather than by copy_temp_map(), which
+     * returns without filling the caller's map and leaves the primitive
+     * installing an uninitialised one.
+     *
+     * len > 0x4000 - (offset & 0x3FFF) is the window-crossing test the
+     * kernel_to_user handler makes against its own in-window address: offset
+     * must stay the offset of a length that ends inside the one 16 KiB window,
+     * or the copy runs off the end of the mapped page into whatever the next
+     * window of the temp map holds. */
+    if (!dst || region > 3 || page > 0x3F || len > 0x4000 ||
+        len > (uint16_t)(0x4000u - (offset & 0x3FFFu))) {
         return MUZIX_SYS_SERVICE_ERR;
     }
 

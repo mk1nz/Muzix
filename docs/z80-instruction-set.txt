@@ -1,0 +1,1033 @@
+===============================================================================
+Z80 INSTRUCTION SET - COMPLETE REFERENCE (DOCUMENTED + UNDOCUMENTED)
+===============================================================================
+
+Sources:
+  - Documented set: Zilog Z80 CPU User Manual (UM008008), the official
+    opcode tables.
+  - Undocumented set: Sean Young, "The Undocumented Z80 Documented",
+    Version 0.91, 18 September 2005 (z80.info/zip/z80-documented.pdf).
+    Extracted and verified section by section: 3.1-3.7 (undocumented
+    opcodes), 4.1-4.7 (undocumented effects), 6.1 (R register).
+  - MEMPTR/WZ rules: boo_boo + V. Kladov, "MEMPTR, esoteric register of the
+    ZiLOG Z80 CPU", 29 March 2006 (zx.pk.ru); table maintained by
+    M. Sainz de Baranda in the redcode/Z80 wiki (rev. 43, last edit
+    7 January 2026); reference implementation redcode/Z80 sources/Z80.c.
+  - SCF/CCF YF/XF ("Q"): P. Rak, discovery of 2012, published on
+    worldofspectrum.org/forums/discussion/41704; formalised by
+    D. Banks, "Undocumented Z80 Flags" rev. 1.0, 21 August 2018
+    (github.com/hoglet67/Z80Decoder/wiki/Undocumented-Flags).
+  - Flag names: S=sign, Z=zero, H=half-carry, P/V=parity/overflow,
+    N=subtract, C=carry.  Undocumented flag bits (3 and 5) are called
+    YF/NF' and XF in Young's document and are copied from the operand or
+    from MEMPTR, not from the result.
+
+Reliability grades used in PART V (and in the expanded PART III):
+
+  [HW]       Confirmed on real CPU - published hardware measurements.
+  [SCHEME]   Confirmed by the reconstructed schematic - follows directly
+             from the die-level analysis, no software test involved.
+  [MULTI]    Confirmed by several independent sources.
+  [OBS]      Published observation - the source describes the effect, but
+             no independent confirmation was found here.
+  [HYP]      Hypothesis - the explanation is not proven.
+  [UNK]      Not established - insufficient data.
+
+Every date below is the date the result was OBTAINED where the source says
+so; the publication date is given separately when they differ.  A test
+passing is never treated here as proof of full CPU compatibility.
+
+T-states below are for the NMOS Z80 at nominal timing.  "d" is a signed
+8-bit displacement.  Registers: A, B, C, D, E, H, L, (HL).  IX/IY forms
+are listed once; the FD prefix behaves identically with IY.
+
+===============================================================================
+PART I - DOCUMENTED INSTRUCTIONS
+===============================================================================
+
+-------------------------------------------------------------------------------
+1. 8-BIT LOAD GROUP
+-------------------------------------------------------------------------------
+  Mnemonic            Opcode          Bytes  T     Flags
+  LD r,r'             40|r|r'         2      4     -
+  LD r,n              06|r<<3 n       2      7     -
+  LD r,(HL)           46|r<<3         2      7     -
+  LD (HL),r           70|r            2      7     -
+  LD (HL),n           36 n            2      10    -
+  LD A,(BC)           0A              1      7     -
+  LD A,(DE)           1A              1      7     -
+  LD A,(nn)           3A nn nn        3      13    -
+  LD (BC),A           02              1      7     -
+  LD (DE),A           12              1      7     -
+  LD (nn),A           32 nn nn        3      13    -
+  LD A,I / LD A,R     ED 57 / ED 5F   2      9     S,Z,P/V=IFF2,N=0
+  LD I,A / LD R,A     ED 47 / ED 4F   2      9     -
+  (r,r' encoding: 0=A 1=B 2=C 3=D 4=E 5=H 6=L 7=(HL);
+   LD H,(HL) with DD prefix becomes LD H,(IX+d), DD 66 d)
+
+-------------------------------------------------------------------------------
+2. 16-BIT LOAD GROUP
+-------------------------------------------------------------------------------
+  LD dd,nn            01|dd<<4 nn nn  3      10    -
+  LD HL,(nn)          2A nn nn        3      16    -
+  LD (nn),HL          22 nn nn        3      16    -
+  LD SP,HL            F9              1      6     -
+  LD SP,IX/IY         DD/FD F9        2      10    -
+  PUSH qq             C5|qq<<4        2      11    -     (15 for IX/IY)
+  POP qq              C1|qq<<4        2      10    -     (14 for IX/IY)
+  EX DE,HL            EB              1      4     -
+  EX AF,AF'           08              1      4     -
+  EXX                 D9              1      4     -
+  EX (SP),HL          E3              1      19    -
+  EX (SP),IX/IY       DD/FD E3        2      23    -
+  (dd: 0=BC 1=DE 2=HL 3=SP; qq: 0=BC 1=DE 2=HL 3=AF)
+
+-------------------------------------------------------------------------------
+3. EXCHANGE, BLOCK TRANSFER, SEARCH GROUP
+-------------------------------------------------------------------------------
+  LDI / LDD           ED A0 / ED A8   2      16    S,Z,CF UNCHANGED, H=0,
+                                               N=0, P/V=(BC!=0),
+                                               Y,X from (byte+A) bits 1,3
+  LDIR / LDDR         ED B0 / ED B8   2      21/16  (21 when BC<>0, 16 when done)
+  CPI / CPD           ED A1 / ED A9   2      16    like CP (HL), plus
+                                               YF,XF from n=(A-(HL)-H), P/V=(BC!=0), N=1
+  CPIR / CPDR         ED B1 / ED B9   2      21/16  as CPI/CPD
+  (Note: an earlier draft of this table wrote "S,Z,H=0" for LDI/LDD.
+   That was wrong - S, Z and CF are UNCHANGED, only H is reset.  Young
+   section 4.2 and the block-flags tests in PART V.2 agree.)
+
+-------------------------------------------------------------------------------
+4. 8-BIT ARITHMETIC AND LOGICAL GROUP
+-------------------------------------------------------------------------------
+  ADD A,s             80|s            2      4/7/19   all flags
+  ADC A,s             88|s            2      4/7/19   all flags
+  SUB s               90|s            2      4/7/19   all flags, N=1
+  SBC A,s             98|s            2      4/7/19   all flags, N=1
+  AND s               A0|s            2      4/7/19   S,Z=Y,X=result,H=1,P,N=0,C=0
+  OR  s               B0|s            2      4/7/19   S,Z=Y,X=result,H=0,P,N=0,C=0
+  XOR s               A8|s            2      4/7/19   S,Z=Y,X=result,H=0,P,N=0,C=0
+  CP s                B8|s            2      4/7/19   like SUB, result discarded, N=1
+  (s: r (4T), n is ADD A,n = C6 n (7T), (HL) 7T, (IX+d) 19T)
+
+-------------------------------------------------------------------------------
+5. GENERAL-PURPOSE ARITHMETIC AND CPU CONTROL GROUP
+-------------------------------------------------------------------------------
+  INC r               3C|r<<3         2      4     S,Z,H,P/V,N=0, C unchanged
+  INC (HL)            34              2      11    as INC r
+  DEC r               05|r<<3         2      4     S,Z,H,P/V,N=1, C unchanged
+  DEC (HL)            35              2      11    as DEC r
+  INC ss              03|ss<<4        2      6     no flags
+  DEC ss              0B|ss<<4        2      6     no flags
+  DAA                 27              1      4     see 4.7 for exact rules
+  CPL                 2F              1      4     S,Z,H=1,N=1, Y,X,P copied
+  NEG                 ED 44           2      8     like SUB A,A
+  SCF                 37              1      4     C=1, H=0, N=0; S,Z,P/V
+                                               unchanged; YF,XF are NOT
+                                               undefined - see PART V.1 (Q)
+  CCF                 3F              1      4     C=!C, H=oldC, N=0; S,Z,
+                                               P/V unchanged; YF,XF see
+                                               PART V.1 (Q)
+  NOP                 00              1      4     -
+  HALT                76              1      4     -
+  DI                  F3              1      4     IFF1,IFF2 = 0
+  EI                  FB              1      4     IFF1,IFF2 = 1, but an INT
+                                               is not accepted during EI
+                                               itself - see PART V.5
+  IM 0 / 1 / 2        ED 46/56/5E     2      8     -
+
+-------------------------------------------------------------------------------
+6. 16-BIT ARITHMETIC GROUP
+-------------------------------------------------------------------------------
+  ADD HL,ss           09|ss<<4        2      11    S,Z,Y,X,H from high byte,
+                                              P/V unchanged, N=0, C
+  ADC HL,ss           ED 4A|ss<<3     2      15    with carry, full flags
+  SBC HL,ss           ED 42|ss<<3     2      15    full flags, N=1
+
+-------------------------------------------------------------------------------
+7. ROTATE AND SHIFT GROUP
+-------------------------------------------------------------------------------
+  RLCA / RRCA         07 / 0F         1      4     C, H=0,N=0, Y,X from result, P unchanged
+  RLA / RRA           17 / 1F         1      4     C, others as RLCA
+  CB rotates/shifts on r   CB 00-3F   2      8     -
+  CB rotates/shifts on (HL) CB 06,0E,16,1E,26,2E,36,3E   2  15   -
+  RLC r/rlc (HL)       CB 00-07        2      8/15  S,Z,Y,X,H=0,N=0,P,C
+  RRC r/(HL)           CB 08-0F        2      8/15  same flags
+  RL r/(HL)            CB 10-17        2      8/15  same flags
+  RR r/(HL)            CB 18-1F        2      8/15  same flags
+  SLA r/(HL)           CB 20-27        2      8/15  S,Z,Y,X,H=0,N=0,P,C=bit7
+  SRA r/(HL)           CB 28-2F        2      8/15  C=bit0, sign preserved
+  SRL r/(HL)           CB 38-3F        2      8/15  S,Z,Y,X,H=0,N=0,P,C=bit0
+
+-------------------------------------------------------------------------------
+8. BIT SET, RESET AND TEST GROUP
+-------------------------------------------------------------------------------
+  BIT n,r              CB 40|n<<3|r    2      8     S=(n=7 & bit),Z=(bit=0),
+                                              Y=(n=5 & bit),H=1,X=(n=3 & bit),
+                                              P=Z,N=0,C unchanged
+  BIT n,(HL)           CB 46|n<<3      2      12    Y,X from MEMPTR (see 4.1)
+  RES n,r              CB 80|n<<3|r    2      8     -
+  SET n,r              CB C0|n<<3|r    2      8     -
+  RES n,(HL)           CB 86|n<<3      2      15    -
+  SET n,(HL)           CB C6|n<<3      2      15    -
+
+-------------------------------------------------------------------------------
+9. JUMP GROUP
+-------------------------------------------------------------------------------
+  JP nn                C3 nn nn        3      10    -
+  JP cc,nn             C2/CA/D2/DA/E2/EA/F2/FA   3  10    -
+  JR e                 18 d            2      12    -
+  JR NZ,e / Z,e       20 / 28 d        2      12/7  -
+  JR NC,e / C,e        30 / 38 d        2      12/7  -
+  DJNZ e               10 d            2      13/8  B--
+  JP (HL)              E9              1      4     -
+  JP (IX/IY)           DD/FD E9        2      8     -
+
+-------------------------------------------------------------------------------
+10. CALL AND RETURN GROUP
+-------------------------------------------------------------------------------
+  CALL nn              CD nn nn        3      17    -
+  CALL cc,nn           C4/CC/D4/DC/E4/EC/F4/FC nn nn  3  17/10  -
+  RET                  C9              1      10    -
+  RET cc               C0/C8/D0/D8/E0/E8/F0/F8   1  11/5   -
+  RETI                ED 4D            2      14    -
+  RETN                ED 45            2      14    -
+  RST p                C7|p            1      11    -
+
+-------------------------------------------------------------------------------
+11. INPUT AND OUTPUT GROUP
+-------------------------------------------------------------------------------
+  IN A,(n)             DB n            2      11    -
+  OUT (n),A            D3 n            2      11    -
+  IN r,(C)             ED 40|r<<3      2      12    S,Z,Y,X,H=0,P,N=0
+  OUT (C),r            ED 41|r<<3      2      12    -
+  INI / IND            ED A2 / ED AA   2      16    see 4.3
+  OUTI / OUTD          ED A3 / ED AB   2      16    see 4.3
+  INIR / INDR          ED B2 / ED BA   2      21/16  as INI/IND
+  OTIR / OTDR          ED B3 / ED BB   2      21/16  as OUTI/OUTD
+  (Note 4.4: IN r,(C), OUT (C),r and the block I/O place the whole BC on
+   the address bus, and IN A,(n)/OUT (n),A place A*256+n)
+
+-------------------------------------------------------------------------------
+12. ED-PREFIX SUPPORT
+-------------------------------------------------------------------------------
+  SBC HL,BC/DE/HL/SP  ED 42/52/62/72  2  15
+  ADC HL,BC/DE/HL/SP  ED 4A/5A/6A/7A  2  15
+  LD (nn),BC/DE/HL/SP ED 43/53/63/73  3  20
+  LD BC/DE/SP,(nn)    ED 4B/5B/7B     3  20
+  RRD / RLD            ED 67 / ED 6F   2  18    S,Z,Y,X,H=0,P,N=0
+
+===============================================================================
+PART II - UNDOCUMENTED INSTRUCTIONS (per Sean Young, v0.91)
+===============================================================================
+
+-------------------------------------------------------------------------------
+1. SLL - SHIFT LOGICAL LEFT (section 3.1)
+-------------------------------------------------------------------------------
+Works exactly like SLA, except bit 0 is SET instead of reset.
+  CB 30  SLL B        CB 31  SLL C      CB 32  SLL D      CB 33  SLL E
+  CB 34  SLL H        CB 35  SLL L      CB 36  SLL (HL)   CB 37  SLL A
+All: 2 bytes, 8 T (15 for (HL)).  Result = (r << 1) | 1.
+Flags: S, Z, Y, X from the result; H=0; N=0; P=parity; C=old bit 7.
+Equivalent documented sequence: SLA r; OR 1  (4+7 = worse in both size
+and time).  SLL r (IX+d) / SLL (IY+d) exist in the DDCB space (below).
+
+-------------------------------------------------------------------------------
+2. IXH, IXL, IYH, IYL (sections 3.2, 3.3)
+-------------------------------------------------------------------------------
+The DD prefix (IX) or FD prefix (IY) makes any H or L operand in the
+FOLLOWING instruction mean the high or low half of IX or IY.  Any other
+opcode byte resets that selection; in a run of DD/FD bytes the LAST one
+wins.  LD IXl,IYh is not possible: one instruction touches only IX or
+only IY, never both.
+
+Opcode formulas (identical for FD with IY; the grid is the ordinary
+LD r,r' / arithmetic grid with H=IXh (4) and L=IXl (5) substituted,
+so the arithmetic is the ordinary 80-FF grid with 4/5 meaning IXh/IXl):
+  LD IXh,B/C/D/E/IXh/IXl/A   DD 60,61,62,63,64,65,67   2B 8T
+  LD IXl,B/C/D/E/IXh/IXl/A   DD 68,69,6A,6B,6C,6D,6F   2B 8T
+  LD B/C/D/E,IXh           DD 44,48,50,54              2B 8T
+  LD B/C/D/E,IXl           DD 45,49,51,55              2B 8T
+  LD IXh,n / LD IXl,n        DD 26 n / DD 2E n          3B 11T
+  ADD A,IXh/IXl              DD 84 / DD 85              2B 8T
+  ADC/SUB/SBC/AND/OR/XOR/CP  DD 8C/94/9C/A4/AC/B4/BC    2B 8T  (IXh)
+  with IXl                 DD 8D/95/9D/A5/AD/B5/BD    2B 8T
+  INC IXh / INC IXl          DD 24 / DD 2C              2B 8T  (flags as INC H)
+  DEC IXh / DEC IXl          DD 25 / DD 2D              2B 8T
+(Verified against Young's 8.1 table "LD p,p'" - DD 01 dst src, 2 bytes,
+ 8 T, where p is B,C,D,E,IXh,IXl,A.  The grid value 6 in a DD-prefixed
+ opcode means (IX+d) and consumes a displacement byte: DD 66 d is
+ LD H,(IX+d), not a register transfer.  Instructions the DD/FD prefix
+ simply ignores - EX DE,HL (DD EB), EXX (DD D9), ED-prefixed uses of HL -
+ execute normally with a 4 T penalty and R += 1 (section 6.1).  A DD/FD
+ prefix with no following opcode that uses HL is two NOPs.)
+
+-------------------------------------------------------------------------------
+3. DDCB / FDCB - INDEXED BIT OPERATIONS WITH REGISTER WRITE-BACK (3.5, 3.6)
+-------------------------------------------------------------------------------
+Format: DD CB d op  (4 bytes).  The low 3 bits of the last byte select an
+extra destination register: 0=B, 1=C, 2=D, 3=E, 4=IXh, 5=IXl, 6=(none,
+documented form), 7=A.
+
+Undocumented forms (the documented opcode is the ",6" one):
+  RLC (IX+d),B/C/D/E/H/L/A   DD CB d 00-05,07   4 bytes, 23 T
+  RRC (IX+d),r               DD CB d 08-0D,0F   4 bytes, 23 T
+  RL  (IX+d),r               DD CB d 10-15,17   4 bytes, 23 T
+  RR  (IX+d),r               DD CB d 18-1D,1F   4 bytes, 23 T
+  SLA (IX+d),r               DD CB d 20-25,27   4 bytes, 23 T
+  SRA (IX+d),r               DD CB d 28-2D,2F   4 bytes, 23 T
+  SLL (IX+d),r               DD CB d 30-35,37   4 bytes, 23 T
+  SRL (IX+d),r               DD CB d 38-3D,3F   4 bytes, 23 T
+  SET n,(IX+d),r             DD CB d C0-FF     4 bytes, 23 T
+  RES n,(IX+d),r             DD CB d 80-BF     4 bytes, 23 T
+  BIT n,(IX+d),r             DD CB d 40-7F     4 bytes, 20 T
+      BIT stores nothing, so the register operand is a no-op and these are
+      NOT distinct from the documented BIT n,(IX+d).
+FDCB is identical with IY.
+Semantics of, say, DD CB d 00 (RLC (IX+d),B):
+      LD B,(IX+d) : RLC B : LD (IX+d),B   - one instruction, 23 T.
+The documented DDCB 0106 is RLC (IX+01h) - the ",B" form adds the copy to
+B at no extra cost.
+
+-------------------------------------------------------------------------------
+4. UNDOCUMENTED ED-PREFIXED INSTRUCTIONS (section 3.4)
+-------------------------------------------------------------------------------
+Any EDxx not listed behaves as two NOPs.
+  ED 40,48,50,58,60,68,70,78   IN B,C,D,E,H,L,(none),A ,(C)  2B 12T, flags as IN r,(C)
+                                (ED 70 = IN F,(C): reads port C, discards the
+                                 value, affects the flags only)
+  ED 41,49,51,59,61,69,71,79   OUT (C),B,C,D,E,H,L,0,A     2B 12T
+                                (ED 71 = OUT (C),0: outputs the constant 0)
+  ED 42,52,62,72   SBC HL,BC/DE/HL/SP                       2B 15T  (ED 62/72 are the surprises)
+  ED 4A,5A,6A,7A   ADC HL,BC/DE/HL/SP                       2B 15T
+  ED 43,53,63,73   LD (nn),BC/DE/HL/SP                      3B 20T  (ED 63 = duplicate of 22, 20T not 16T)
+  ED 4B,5B,6B,7B   LD BC/DE/HL/SP,(nn)                      3B 20T  (ED 6B = duplicate of 2A)
+  ED 44,4C,54,5C,64,6C,74,7C  NEG (all eight)                2B  8T
+  ED 45,55,65,75,5D,6D,7D     RETN (all except ED 4D RETI)  2B 14T
+  ED 46,4E,56,5E,66,6E,76,7E  IM 0 (all except ED 56 IM 1)  2B  8T
+  ED 63 / ED 6B: useful only as size waste.
+Most of these are duplicates; the practical ones are ED 70, ED 71,
+ED 62 (SBC HL,HL - a clean "load 0 into HL with flags"), ED 42/4A
+pairs, and the full NEG/RETN/IM grids that let code pick any alignment.
+
+-------------------------------------------------------------------------------
+5. PREFIX COMBINATIONS (section 3.7)
+-------------------------------------------------------------------------------
+DD/FD only set "use IX/IY instead of HL"; the last one in a run wins.
+CB or ED consume the following byte as part of the instruction.
+A DD/FD prefix with no following opcode that uses HL costs 4 T and
+increments R by 1 (section 6.1).
+
+===============================================================================
+PART III - UNDOCUMENTED EFFECTS (Chapter 4 and 6)
+===============================================================================
+
+-------------------------------------------------------------------------------
+1. MEMPTR (WZ) AND THE BIT n,(HL) FAMILY (section 4.1 + PART V.1)
+-------------------------------------------------------------------------------
+MEMPTR is an internal 16-bit register written by ADD HL,xx (takes the high
+byte of HL BEFORE the addition), LD r,(IX+d)/(IY+d) (the resulting
+address), JR d (the jump target).  LD r,r' does not change it.
+BIT n,r flags: S set only if n=7 and the bit is set; Z set if the bit is
+reset; Y set if n=5 and the bit is set; X set if n=3 and the bit is set;
+H=1; P=Z; N=0; C unchanged.
+BIT n,(IX+d): Y and X come from bits 5 and 3 of the HIGH BYTE of (IX+d).
+BIT n,(HL): Y and X come from the high byte of MEMPTR - i.e. from
+whatever the last address-former left there.  The same MEMPTR value is
+visible as the X/Y flags of many other instructions (Young's tables in
+chapter 8 note "flags WZ" for them).
+
+--- Complete MEMPTR rules (discovered 2006, verified since) ----------------
+Primary source: boo_boo + Vladimir Kladov, "MEMPTR, esoteric register of
+the ZiLOG Z80 CPU", zx.pk.ru, 29 March 2006.  How it was cracked: CPI
+increments MEMPTR by 1 and CPD decrements it by 1, so a CPD loop can walk
+MEMPTR down until bit 13 flips, which makes the low 14 bits readable
+through BIT n,(HL).  The paper names its real-hardware testers (Wlodek,
+CHRV, icebear, molodcov_alex, goodboy).  [MULTI]
+
+Only bits 11 and 13 of MEMPTR are observable, and only as XF/YF after BIT
+n,(HL).  [HW]
+
+"PC" below is the address of the first byte of the instruction (the ED,
+DD or FD prefix where there is one).
+
+  LD r,(IX+d) / LD (IX+d),r / any (IX+d) operand        MEMPTR = IX+d
+  LD A,(BC)                                             MEMPTR = BC+1
+  LD A,(DE)                                             MEMPTR = DE+1
+  LD A,(nn)                                             MEMPTR = nn+1
+  LD (BC),A                                            MEMPTR = (A<<8)|((C+1)&FF)
+  LD (DE),A                                            MEMPTR = (A<<8)|((E+1)&FF)
+  LD (nn),A                                            MEMPTR = (A<<8)|((nn+1)&FF)
+  LD dd,(nn) and LD (nn),dd (BC,DE,HL,SP,IX,IY)       MEMPTR = nn+1
+  EX (SP),HL / EX (SP),IX / EX (SP),IY                 MEMPTR = value from (SP)
+  ADD HL,ss / ADC HL,ss / SBC HL,ss                     MEMPTR = HL_old+1
+  ADD IX,WW etc. (16-bit index add)                     MEMPTR = IX_old+1
+  RLD / RRD                                             MEMPTR = HL+1
+  JP nn, CALL nn - conditional or not, taken or not     MEMPTR = nn
+  JR e                                                  MEMPTR = PC+2+e
+  JR cc,e - only when the branch is taken                MEMPTR = PC+2+e
+  DJNZ e  - only when the branch is taken                MEMPTR = PC+2+e
+  RET / RETI / RETN                                     MEMPTR = value popped
+  RET cc - only when taken                              MEMPTR = value popped
+  RST p                                                 MEMPTR = PC_old
+  IN A,(n)                                              MEMPTR=(A_old<<8)|((n+1)&FF)
+  IN r,(C) and the undocumented IN (C) (ED 70)          MEMPTR = BC+1
+  OUT (C),r / OUT (C),0 (ED 71)                         MEMPTR = BC+1
+  OUT (n),A                                             MEMPTR=(A<<8)|((n+1)&FF)
+  LDI / LDD                                             MEMPTR unchanged
+  LDIR / LDDR  (BC decremented)                         if the new BC<>0:
+                                                          MEMPTR = PC+1
+                                                        (last iteration:
+                                                          unchanged)
+  CPI                                                    MEMPTR = MEMPTR+1
+  CPD                                                    MEMPTR = MEMPTR-1
+  CPIR / CPDR                                            while A<>(HL) and the
+                                                          new BC<>0:
+                                                          MEMPTR = PC+1
+                                                        (last iteration falls
+                                                          back to CPI/CPD, so
+                                                          the final value is
+                                                          PC+1+1 or PC+1-1
+                                                          with no interrupt)
+  INI / INIR                                             MEMPTR = BC_before+1
+                                                         (B not yet decremented)
+  IND / INDR                                             MEMPTR = BC_before-1
+  OUTI / OUTD                                            MEMPTR = BC_before+1
+                                                         (B decremented FIRST,
+                                                          then +1)
+  OTIR / OTDR                                            same, per iteration
+  Interrupt acknowledge (call to addr)                   MEMPTR = addr
+  Any instruction not in this list                       MEMPTR unchanged
+
+Corrections to the 2006 paper itself, both later verified:
+  (a) The paper states that INIR/INDR/OTIR/OTDR "always behave as the
+      non-repeating form".  That is wrong for the non-final iterations.
+      rofl0r found in 2022 that OTIR/OTDR set MEMPTR = PC+1 during the
+      extra M-cycle; M. Sainz de Baranda rediscovered the same behaviour
+      for all four (INIR, INDR, OTIR, OTDR) in 2023.  raxoft's z80memptr
+      v1.2a (2 December 2023) fixed its INIR/INDR CRCs against this.
+      [MULTI]
+  (b) The paper's "if BC == 1" wording for LDIR/LDDR is the same rule as
+      "the decremented BC is non-zero" for every value of BC except BC=0
+      on entry, where the count wraps to 65536.  That single case is
+      [UNK] - no source tests it.
+
+--- Reading MEMPTR back on real hardware ---------------------------------
+Tony Brewer published two routines on stardot (posts 211961 and 212364)
+that recover the whole 14-bit-wide readable window WZ[13:0].  Both work
+by using CPD to decrement MEMPTR in a loop and watching bit 13 through
+BIT 0,(HL).  The "fast" variant needs the two target labels inside one
+256-byte page.  They are reproduced verbatim in the redcode/Z80 wiki
+page "MEMPTR" and are the practical way to build a hardware MEMPTR test
+for this board.  [HW]
+
+-------------------------------------------------------------------------------
+2. MEMORY BLOCK INSTRUCTIONS (section 4.2)
+-------------------------------------------------------------------------------
+LDI/LDD/LDIR/LDDR, per iteration: n = (byte copied) + A;
+  Y = bit 1 of n; X = bit 3 of n; H = 0; P = (BC != 0);
+  S, Z, CF unchanged; N = 0.
+CPI/CPD/CPIR/CPDR, per iteration: n = A - (HL) - H;
+  S, Z, H set by that subtract; Y = bit 1 of n; X = bit 3 of n;
+  P = (BC != 0); N = 1; CF unchanged.
+
+-------------------------------------------------------------------------------
+3. I/O BLOCK INSTRUCTIONS (section 4.3, found by Ramsoft)
+-------------------------------------------------------------------------------
+All of INI/IND/OUTI/OUTD/INIR/INDR/OTIR/OTDR:
+  S, Z, Y, X are set as if DEC B were executed on B.
+  N = bit 7 of the byte read from or written to the port.
+OUTI/OUTI,OUTD,OTIR,OTDR: k = L (after the HL increment/decrement) + value:
+  H = C = (k > 255); P = parity of ((k & 7) XOR B).
+INI/INIR/IND/INDR: same, but with (C+1) for INI/INIR and (C-1) for
+IND/INDR in place of L.
+
+-------------------------------------------------------------------------------
+4. BLOCK INSTRUCTION REPETITION (section 4.5 + Banks 2018)
+-------------------------------------------------------------------------------
+LDIR/CPIR/INIR/OTIR and friends are the single-step instruction followed
+by "decrease PC by 2" while the counter is non-zero, so interrupts are
+taken BETWEEN iterations, and every iteration re-reads the flags.
+
+That extra M-cycle of 5 T-states also changes flags, which is normally
+invisible because the next iteration overwrites them - but an interrupt
+taken at that point makes them visible to the handler.  D. Banks
+discovered this in 2018 ("Undocumented Z80 Flags" rev. 1.0, 21 August
+2018, github.com/hoglet67/Z80Decoder, thread 15464 on stardot), and
+Peter Helcmanovsky wrote the "Z80 Block Flags Test" that verifies most of
+the reachable cases on a real Spectrum.  [MULTI]
+
+For LDxR / CPxR, the extra flag change is:
+  YF = PC.13,  XF = PC.11        (PC = address of the ED prefix)
+For INxR / OTxR it is the same PLUS, depending on CF and bit 7 of the
+byte transferred:
+  if (CF):
+      if (data & 80h): PF ^= Parity((B-1) & 7) ^ 1; HF = ((B & 0Fh) == 0)
+      else:            PF ^= Parity((B+1) & 7) ^ 1; HF = ((B & 0Fh) == 0Fh)
+  else:
+      PF ^= Parity(B & 7) ^ 1
+Practical consequence for this tree: a block instruction that is
+interrupted hands the ISR a flag byte whose X and Y bits are a fragment
+of the instruction's own ADDRESS.  Nothing in Muzix reads F inside the
+tick or UART handler, so this is safe here, but any future handler that
+saves AF and inspects XF/YF after an interrupted LDIR/CPIR would be
+reading the address bus, not a result.
+
+-------------------------------------------------------------------------------
+5. 16-BIT ADDITIONS (section 4.6)
+-------------------------------------------------------------------------------
+ADD/ADC/SBC HL,ss set S, Y, H, X from the SECOND (high-byte) addition,
+Z from the whole 16-bit result, C from the full 16-bit carry, and never
+touch P/V.
+
+-------------------------------------------------------------------------------
+6. DAA (section 4.7, tables by Stefano Donati / Ramsoft)
+-------------------------------------------------------------------------------
+Input: A, CF, HF, NF.  With NF reset ADD the correction from this table
+to A, with NF set SUBTRACT it:
+  CF high nibble 0-9, HF 0, low 0-9  -> diff 00, CF' 0
+  CF high 0-9,    HF 0, low a-f     -> 06,     CF' 0
+  CF high 0-9,    HF 1, low 0-9     -> 06,     CF' 0
+  CF high a-f,    HF 0, low 0-9     -> 60,     CF' 1
+  CF high 9-f,    HF 0, low a-f     -> 66,     CF' 1
+  CF high a-f,    HF 1, low 0-9     -> 66,     CF' 1
+  CF high 9-f,    HF 1, low a-f     -> 66,     CF' 1
+CF' is 1 whenever the high nibble of A was a-f (or 9 with the 66
+corrections).  HF' = 1 only when NF=1 and HF=0 and the low nibble was
+6-f, or NF=0 and HF=1 and the low nibble was 0-5.  S, Y, X are bits
+7,5,3 of the result; Z from the result; NF unchanged.  DAA reads CF, so
+it must not follow INC/DEC of A.
+DAA cannot be used after INC/DEC because they leave CF stale.
+
+-------------------------------------------------------------------------------
+7. R REGISTER AND MEMORY REFRESH (section 6.1)
+-------------------------------------------------------------------------------
+R is incremented on every M1 (first machine) cycle; prefixes have their
+own M1, so:
+  - plain instruction:                 R += 1
+  - DD, FD, ED, CB prefixed:           R += 2
+  - DDCB, FDCB four-byte instructions: R += 2
+  - a stray DD or FD alone:             R += 1
+  - a non-maskable interrupt:          R += 1
+Only the low 7 bits increment; bit 7 is preserved and can only be changed
+by LD R,A.  LD A,R and LD R,A observe R after this instruction's own
+increment.  R is 0 after reset.  The whole IR pair goes on the address
+bus with RFSH low during refresh.
+
+===============================================================================
+PART IV - NOTES FOR THIS PROJECT
+===============================================================================
+
+1. sdasz80 assembler (as installed here) does NOT accept DD/FD mnemonics.
+   Any use of IXH/IXL/SLL/DDCB-register forms must be emitted as
+       .db    0xdd,0xcb,offset,opcode
+   with a decoding comment.  The host compiler never emits them.
+
+2. The emulator in emulator/z80/z80.c implements the complete set:
+   prefix dispatch for DD/FD/ED/CB, exec_opcode_ddcb with the register
+   write-back (including cb_sll in the memory path), cb_sll, and the
+   MEMPTR flag effects (z->yf/z->xf from the address high byte in the BIT
+   path).  Any instruction listed above can be tested on the emulator
+   before the board.
+
+   Two gaps against PART III.1 and PART V.1, checked on 2026-10-15 by
+   reading emulator/z80/z80.c and z80.h (there is no separate cb source):
+   (a) MEMPTR (z->mem_ptr, z80.h:19) IS modelled, and is updated for the
+       LD (BC/DE/nn),A, LD A,(BC/DE/nn), IN/OUT, EX (SP),HL, RLD/RRD,
+       CPI/CPD, the block I/O forms and the 16-bit adds.  It is NOT
+       updated for JP/CALL/JR taken or not taken, RET/RETI/RST, or the
+       MEMPTR = PC+1 of the extra M-cycle of LDIR/LDDR/CPIR/CPDR/INIR/
+       INDR/OTIR/OTDR, and not for the interrupt-acknowledge value.
+       So BIT n,(HL) after any control-transfer instruction reads a stale
+       MEMPTR in the emulator.
+   (b) SCF and CCF at z80.c:1048 and z80.c:1062 always take XF/YF from A
+       unconditionally.  That is the NEC variant, not the Zilog Q rule.
+       The emulator therefore reproduces the pre-2012 model of PART V.1
+       and would fail about half of raxoft's z80ccf on genuine Zilog
+       hardware.  Fixing it needs one new byte field (a "Q" latch) set to
+       0 by every instruction that does not write F and to the new F by
+       every instruction that does, plus the single formula in PART V.1.
+   Neither gap affects anything this tree currently executes, because
+   nothing under platform/ uses BIT n,(HL) or SCF/CCF flag bits.  They
+   are recorded so they are not mistaken for verified behaviour.
+
+3. Portability: Z180 and eZ80 (in Z80 mode) execute the full documented
+   and undocumented set, but some timings differ and a few flag details
+   (BIT n,(HL) X/Y source, SCF/CCF P/V) are not identical across
+   derivatives.  Keep uses inside platform/zeta-v2/*.s, commented, and
+   re-run the hardware tests (T1-T7 in docs/z80-undocumented-instructions.md)
+   before trusting any of them on a new CPU.
+
+4. The single most useful undocumented instruction for this tree was
+   already applied: EXX + EX AF,AF' in the interrupt handlers (both
+   documented), which cut the tick ISR's register save/restore from 142 T
+   to 74 T.  The best undocumented candidate, the DDCB rotate with
+   register write-back, was surveyed and deliberately NOT applied - see
+   docs/z80-undocumented-instructions.md for the reasoning.
+
+===============================================================================
+PART V - SUBSEQUENT RESEARCH (2006-2026), NOT IN YOUNG v0.91
+===============================================================================
+
+Everything in this part post-dates Young v0.91 (18 September 2005) or was
+left out of it.  It is ordered by subject, not by importance.  Nothing
+here repeats the audit in docs/z80-undocumented-instructions.md.
+
+-------------------------------------------------------------------------------
+1. THE Q FACTOR AND THE YF/XF RESULT OF SCF / CCF
+-------------------------------------------------------------------------------
+Timeline, with the dates distinguished:
+  - Before 2012: the community position (still what Young §4.4 says) was
+    that after SCF/CCF bits 5 and 3 of F are simply copied from A.  This
+    is wrong roughly half the time.
+  - 2012: Patrik Rak established that the values of XF and YF after SCF or
+    CCF depend on whether the PRECEDING instruction modified the flags.
+    Publication: worldofspectrum.org/forums/discussion/41704.
+  - 21 August 2018: David Banks formalised it in "Undocumented Z80 Flags"
+    rev. 1.0 and extended it to the NEC and ST variants.  He verified the
+    Zilog NMOS rule on real hardware and second-source parts.
+
+State of the art (Zilog NMOS, also holds for Zilog CMOS):
+  if <previous instruction modified the flags> then
+      YF = A.5 ;  XF = A.3
+  else
+      YF = YF | A.5 ;  XF = XF | A.3
+  end if
+
+Model variants (Banks 2018; real-hardware confirmed):
+  - NEC NMOS (uPD780C and NEC-marked second sources): ALWAYS
+        YF = A.5 ;  XF = A.3
+    i.e. the OR-with-old-F behaviour never appears.
+  - ST CMOS (SGS-Thomson / STMicroelectronics Z84Cxxxx): ALWAYS
+        XF = A.3
+    and YF follows the Zilog rule (A.5 if the previous instruction
+    modified the flags, else YF | A.5).
+
+What Q is, and what it is not:
+
+  Q is NOT a separate physical register.  No primary source demonstrates
+  one.  It is an abstraction for a set of latches in the flag path: from
+  an emulator's point of view, an instruction that changes F loads the
+  latch with the final value of F, and an instruction that does not
+  change F - including EX AF,AF', POP AF, internal NOPs and interrupt
+  responses - leaves the latch at 0.  M. Sainz de Baranda writes exactly
+  this in sources/Z80.c of the redcode/Z80 emulator (comment block
+  "Q serves as an abstraction for a set of latches related to flag
+  computation"), and cpcitor's CPC port of the XCF test describes Q as
+  "an abstraction for a set of latches within the ALU where the CPU
+  constructs the updated values of the flags".
+
+  The unified formula implemented by redcode/Z80 (INSN(scf), INSN(ccf))
+  is equivalent to Banks' two cases above:
+        YF = A.5 | (YFi ^ YQi) ;  XF = A.3 | (XFi ^ XQi)
+  because Q is either 0 (giving YF | A.5) or equal to F (giving A.5).
+  Emulators that implement "A | Q" without the "^ F" produce NEC-like
+  output on chained SCF - a known bug in several cores.
+
+  Treating Q as a real, separately named register in documentation is
+  therefore [HYP] at best; the OBSERVABLE rule above is [HW].
+
+Known exceptions and limits:
+  - A DD or FD prefix immediately before SCF/CCF destroys the
+    information about the previous instruction.  To SCF/CCF, the DD/FD
+    byte IS the previous instruction and it does not modify the flags,
+    so the OR branch is always taken.  This is the only situation in
+    which a DD/FD byte acts as an instruction in its own right rather
+    than as a prefix.  Found by Tony Brewer, published 9 July 2026 on
+    stardot (post 481595).  [OBS] - single source, hardware-confirmed
+    claim, no independent confirmation located here.
+  - On some CPU/board combinations the SCF/CCF result is not even stable
+    run to run.  Patrik Rak reports that this is not a property of the
+    manufacturer: any CPU model can show it depending on the board and
+    on external factors, and Zilog parts were "almost always stable" in
+    real machines.  Do not use SCF/CCF XF/YF as a CPU-type fingerprint
+    without the stability test of PART V.2.
+  - POP AF is NOT a flag-modifying instruction for this purpose.
+  - The NEC rule means a NEC part cannot be distinguished from a Zilog
+    part by a single SCF/CCF, only by a sequence that relies on the
+    OR branch.
+
+Emulator guidance: implement Q as a byte latch.  Set it to 0 at the end
+of any instruction that does not write F (and in every interrupt
+response), and to the new F at the end of any instruction that does.
+Then SCF/CCF need only the one formula.  A core without Q passes
+z80full/z80doc but fails roughly half of z80ccf.
+
+-------------------------------------------------------------------------------
+2. TEST SUITES AND WHAT THEY ACTUALLY ESTABLISH
+-------------------------------------------------------------------------------
+raxoft/z80test (Patrik Rak, first release 7 December 2012, latest
+1.2a of 2 December 2023, MIT licence,
+github.com/raxoft/z80test):
+  z80full    - all flags and all registers, exhaustive per instruction.
+  z80doc     - all registers, documented flags only.
+  z80flags   - all flags, registers ignored.
+  z80docflags- documented flags only.
+  z80ccf     - all flags after executing CCF after each instruction.
+               This is the only public exhaustive test of the Q rule.
+  z80memptr  - all flags after executing BIT N,(HL) after each
+               instruction, i.e. an exhaustive test of MEMPTR.
+  z80ccfscr  - visualises the SCF/CCF outcome per screen position, to
+               separate a deterministic variant from random bus drift.
+  All expected values were captured from a real 48K Spectrum with a
+  Zilog Z80.  The suite is the de-facto compatibility yardstick: it is
+  the reason redcode/Z80 documents that a build must be configured with
+  -DZ80_WITH_Q=YES to pass it.
+  Limitations Rak states himself: z80ccf assumes genuine Zilog behaviour
+  and "will fail half of the tests on CPUs which use another variant";
+  the z80memptr vectors "were not specifically designed to stress test
+  MEMPTR, so many of the possible problems are very likely left
+  undetected".  Passing the suite is therefore NOT evidence of full CPU
+  compatibility.
+
+redcode/Z80 wiki test catalogue (github.com/redcode/Z80/wiki/Tests) -
+hardware tests, each with a real-machine result section naming the CPU
+model and the tester:
+  CPD-Test              Michael Sapach, 2025-04/05.  MEMPTR changes per
+                        instruction, verified on real hardware.
+  IN-MEMPTR             Helcmanovsky + Sainz de Baranda, 2021-12-20.
+                        MEMPTR after the IN instructions.
+  Z80 Block Flags Test  Helcmanovsky, v5.0 2022-2026.  Implements
+                        Banks' interrupted-block rules, including the
+                        HF/PF cases, with a real-hardware result on a
+                        SGS Z8400AB1 Spectrum+.
+  Z80 XCF Flavor        Sainz de Baranda, v1.5 2024-02-06.  Displays
+                        YF/XF after CCF and SCF for every combination of
+                        Q, F and A, with reference columns for "any
+                        Zilog", "NEC NMOS" and "ST CMOS".  Its own
+                        warning: it is NOT an exhaustive check of how
+                        each instruction affects Q, only of the resulting
+                        flag values.
+  Z80 CCF-SCF Outcome Stability
+                        Helcmanovsky, v1.1 2022.  Detects randomness of
+                        the SCF/CCF outcome against frame position.
+  Z80 INT Skip          Helcmanovsky, v5.0 2026-10-05.  Which
+                        instruction/prefix blocks accept /INT.
+  Z80 Special Reset     Tony Brewer, 2014-12, US patent 4486827.
+  Z80 CPU Bug           Brewer, confirmed 2022-05.  See PART V.5.
+  FDDD / FDDD2          Helcmanovsky, 2022.  A solid 64 KiB block of
+                        FD DD pairs: the CPU must sit in the prefix loop
+                        and not react to INT or NMI, only to RESET.
+  Z80 DDFD3             Helcmanovsky, 2022-06-10.  "DD DD E5" must be
+                        PUSH IX, i.e. the last prefix in a run wins and
+                        no prefix is silently eaten.
+  ED777F                Mark Woodmass.  Hardware confirmation that
+                        ED 77 and ED 7F are two NOPs, which PART II.4
+                        already states from Young.  Listed here only
+                        because it is a real-machine result, not a new
+                        rule.
+  Diagnostics I/II      standard exercised/known-vector runs.
+  Zilog Z80 CPU Test Suite  (v1.0/v1.2a) results are published per .tap.
+  Tests that only re-verify long-known behaviour (ZEXALL/ZEXDOC, the
+  Instruction Set Exerciser, z80docflags) are deliberately excluded from
+  this list; they automate existing knowledge rather than adding to it.
+
+Practical note for this tree: build z80doc and z80docflags first. A core
+that fails those is wrong about documented behaviour, and no amount of
+undocumented-flag work will make it trustworthy.  Only then z80full,
+z80ccf and z80memptr.
+
+-------------------------------------------------------------------------------
+3. SILICON-LEVEL RESULTS (Ken Shirriff, 2013-2014)
+-------------------------------------------------------------------------------
+Source: righto.com Z80 label, using Visual 6502 die images.  These are
+scheme/level findings, independently of any software test.
+
+3.1 The ALU is 4 bits wide, not 8 (2013-09,
+     righto.com/2013/09/the-z-80-has-4-bit-alu-heres-how-it.html).
+     [SCHEME]
+     Four single-bit slices form a 4-bit ALU.  An 8-bit operation runs
+     twice: the low nibble first, its result held in a latch, then the
+     high nibble, then the 8-bit result is written back.  There are
+     separate ALU-low and ALU-high buses reaching bits 0-3 and 4-7 of
+     the register file.
+     Consequences a programmer can see:
+       - Half-carry exists naturally: the nibble boundary is a real
+         carry point, which is why H is defined on bit 3 for every
+         8-bit operation.
+       - RRD/RLD need a path from the low bus to the high op2 latch and
+         from the high bus to the low op1 latch, i.e. a dedicated
+         4-bit-digit path in the ALU.  This is the silicon reason RRD
+         and RLD exist as single instructions while other "nibble
+         rotate" forms do not.
+       - The visible shift left by one is performed by the shifter
+         while a value is loaded into the ALU, not by an extra ALU
+         operation, which is why the rotate/shift group is uniform.
+       - Bit selection for BIT/SET/RES is decoded AT the ALU, from
+         instruction bits 5,4,3, instead of in the instruction decoder.
+       - Parity, zero and "nibble < 10" (the DAA helper) are computed by
+         small dedicated circuits next to the ALU.
+
+3.2 Register file (2014-10,
+     righto.com/2014/10/how-z80s-registers-are-implemented-down.html).
+     [SCHEME]
+     - 14 pairs of 8-bit registers, each bit a two-inverter loop; a bit
+       is written by forcing the bus, not by breaking the feedback loop.
+       Bus lines are precharged to +5 each clock, so a weak '1' cannot
+       accidentally clear a bit while reading.
+     - There is no "main" and "alternate" bank.  There are two of every
+       register and four toggle flip-flops rename them.  One handles
+       AF/AF', one handles BC/DE/HL vs BC'/DE'/HL', and two more handle
+       DE vs HL in each bank.  EX DE,HL and EXX therefore cost no data
+       movement at all - they toggle a flip flop.
+     - The flip flops have no reset, so which physical register is A and
+       which is A' is undefined at power-up.  [SCHEME]
+     - The commonly published block diagram shows a separate incrementer
+       for R, an adder for IX/IY offsets and a W'Z' register.  None of
+       those exist on the die.  [SCHEME]
+     - F is copied out of the register file into latches above the ALU
+       at the start of each instruction and copied back at the end.
+       Because of fetch/execute overlap the write-back happens in T3 and
+       the read-in in T4 of the NEXT instruction.  [SCHEME]  This is the
+       microarchitectural reason the SCF/CCF "previous instruction"
+       distinction exists and is hard to emulate exactly.
+     - WZ is a real 16-bit temporary pair in the register file, next to
+       SP.  Its job is to hold a multi-byte operand (a JP/CALL target, or
+       the two stack bytes for EX (SP),HL) until it can be used.
+
+3.3 The 16-bit incrementer/decrementer (2013-11,
+     righto.com/2013/11/the-z-80s-16-bit-incrementdecrement.html).
+     [SCHEME]
+     - Six identical 2-bit inc/dec blocks, with three carry-lookahead
+       gates: one for bits 0-6, one for 7-11, one for 12-14.  Bit 15
+       depends on three lookahead stages rather than fifteen ripple
+       stages.
+     - A 16-input gate detects the value 0001h.  It is used by the block
+       instructions: the CPU tests for BC==1 BEFORE decrementing, which
+       is equivalent to testing for zero afterwards but gives more time
+       to finish the instruction.  This is the exact instruction form the
+       MEMPTR rules in PART III.1 are written against ("if the
+       decremented BC is non-zero").
+     - With carry-in forced to 0 the unit passes a value through
+       unchanged, effectively a 16-bit scratch register.  EX (SP),HL,
+       LD SP,HL and their IX/IY forms use this.  A consequence worth
+       knowing when counting T-states: a transfer through the incrementer
+       latch cannot be overlapped with the next instruction's fetch,
+       because the PC needs the incrementer for its own update.
+      - The incrementer computes NO flags: no parity, negative, carry or
+        zero.  This is a silicon-level answer to "why does INC HL / DEC
+        BC set nothing" - they go through the incrementer alone.
+        ADD HL,ss is different: it also uses the ALU, which is why it
+        sets H, C and Y/X from the high byte (PART III.5) while INC ss
+        and DEC ss set nothing at all.
+     - The refresh input into the lowest carry-lookahead gate forces the
+       carry to 0, stopping the increment at bit 6 so that R is only
+       7 bits and I (which shares the pair) is never touched.  This
+       matches PART III.7 and explains WHY R is 7-bit.  [SCHEME]
+     - 7 bits were chosen because 16 Kbit DRAMs needed 7 row bits; the
+       design became obsolescent with 64 Kbit parts (Shirriff notes a
+       correction thread in the comments), and Z80-derivatives such as
+       the NSC800 moved to 8-bit refresh.  Not directly relevant to
+       Muzix's SRAM board, but it explains R's width.
+
+3.4 Instruction encoding and decode.  [SCHEME]
+     Register fields sit in bits 2-0 and/or bits 5-3 of the opcode; a
+     multiplexer picks the right group, so one register-select circuit
+     serves many instructions.  The pattern 110 is the exception: it
+     means (HL), not a register.  Conditional instructions are decoded
+     from opcode bits 5-4 (condition) and bit 3 (want set or clear),
+     XORed against the selected flag; JR and DJNZ need a couple of extra
+     gates because they do not fit that pattern.  This is why the
+     condition codes in PART I.9 and I.10 line up as they do, and why
+     the DD/FD prefix merely redirects the H/L select - the prefix does
+     not create a new instruction format.
+
+-------------------------------------------------------------------------------
+4. DIFFERENCES BETWEEN Z80 MODELS AND SECOND SOURCES
+-------------------------------------------------------------------------------
+Do not generalise from one part.  Every claim below states the model it
+was measured on.
+
+4.1 Zilog NMOS (Z80, Z80A, Z80B and the Z84xxxx NMOS markings such as
+    Z8400APS, Z8400AB1).  Reference behaviour for everything in this
+    file.  SCF/CCF follow the Q rule (PART V.1).  MEMPTR follows the
+    complete table in PART III.1.  [HW]
+
+4.2 Zilog CMOS (Z84C00xx).  Executed the full documented and
+    undocumented set.  The Q rule still holds (Banks verified it for
+    Zilog CMOS as well).  Shirriff notes from the silicon that the
+    register-renaming flip flops are pass-transistor circuits that
+    depend on capacitance holding a value, which is why the NMOS clock
+    must not stop for more than a couple of microseconds; the CMOS
+    version is different and can stop the clock arbitrarily long.
+    [SCHEME]
+
+4.3 NEC uPD780C / NEC-marked second sources.  SCF and CCF ALWAYS take
+     YF and XF from A alone (PART V.1).  MEMPTR appears to behave as on
+     Zilog.  NEC parts were the ones originally reported to be
+     non-deterministic after SCF/CCF; Rak's finding is that the
+     randomness is a board-level effect, not a NEC property.  [HW]
+
+4.4 SGS-Thomson / STMicroelectronics CMOS (Z84Cxxxx with ST marking).
+    XF is always A.3 after SCF/CCF; YF follows the Zilog Q rule.
+    [HW]
+
+4.5 Soviet clones: KR1858VM1 (NMOS, 4 MHz, Angstrem) and T34VM1 (NMOS,
+    Angstrem/MME).  The 2006 MEMPTR paper names these two explicitly as
+    behaving differently from every other chip tested.  For
+        LD (nn),A / LD (BC),A / LD (DE),A / OUT (n),A
+    the MEMPTR HIGH byte is 0 on *VM1 instead of A, while the low byte
+    is still (addr+1) & 0FFh.  Everything else tested matched.  This is
+    a real difference in an internal address latch, so it is visible in
+    the same way - as XF/YF after a following BIT n,(HL).  [HW]
+    Note for this project: the board in use has no Soviet-clone CPU, but
+    a future board could, and MEMPTR is the one place where the clone
+    would silently diverge rather than crash.
+
+4.6 U880D / U880DC08 (MME Mikroelektronik Erfurt, DDR).  Listed among
+    the Z80-family parts in the redcode wiki CPU-models page.  No
+    MEMPTR, Q, flag or timing divergence specific to the U880 was found
+    in any primary source consulted here.  [UNK]
+
+4.7 There is no universal software CPU ID.  The SCF/CCF Q rule separates
+    Zilog from NEC, the NEC/ST split separates ST from NEC, but the
+    Soviet-clone MEMPTR difference is the only other discriminator
+    located, and it needs a MEMPTR readback routine (PART III.1) to use.
+    Any test that claims to identify "the Z80" from a single instruction
+    sequence is over-claiming; the z80ccfscr and XCF Flavor tools are
+    careful to say they identify variants, not parts.  The software
+    CPU variant identification used in this project follows the
+    multi-probe approach of z80type.asm (Sergey Kiselev), which
+    combines several of these discriminators into a 4-bit signature:
+    https://github.com/skiselev/z80-tests
+
+-------------------------------------------------------------------------------
+5. INTERRUPTS, RESET AND OTHER POST-2005 RESULTS
+-------------------------------------------------------------------------------
+5.1 Interrupt acceptance timing (Achim Flammenkamp, z80.info/interrup.htm;
+    M-cycle tables cross-checked against the redcode wiki "Interrupts"
+    page).  [MULTI]
+     - The CPU tests for an interrupt request at the END of an
+       instruction, except after a NOP inside HALT, an LDD inside LDDR,
+       an OUTI inside OTIR and so on.
+     - /INT must be low for at least about 23 T-states, because the
+       longest instruction (some IX/IY form) lasts that long.
+     - An INT is not accepted during an EI instruction.  Corollary, and
+       this is the part that bites emulator authors: if interrupts are
+       disabled when EI is executed, the interrupt does not occur until
+       after the instruction FOLLOWING the EI, because IFF1 is sampled
+       during EI's own machine cycle.
+     - Interrupt acknowledge is an M1 cycle with /IORQ low and M1 low,
+       plus 2 wait T-states - 7 T in total.  The device drives the data
+       bus with the response byte(s).
+     - IM 0: 13 T for an RST on the bus, 19 T for a CALL; the PC is NOT
+       incremented by the instruction fetch, and additional INTA M1
+       cycles are produced for each further prefix byte.
+     - IM 1: internal RST 38h, 13 T, 3 M-cycles.  The byte on the bus is
+       ignored.
+     - IM 2: 19 T, 5 M-cycles; pointer = (I << 8) | response byte.
+       Zilog's documentation says the low bit of the response vector
+       "must be a zero"; Young's tests found no such restriction and the
+       CPU fetches the pointer regardless.  [OBS against documentation]
+     - NMI: 11 T, 3 M-cycles, pushes PC and jumps to 0066h.  NMI is
+       EDGE-triggered on the high-to-low transition and is stored
+       internally until the next M1 cycle; it is not level-sensitive.
+       A second NMI is not accepted during the NMI response, so two NMI
+       responses cannot be chained without an instruction in between.
+     - An INT holds /INT low until it is cleared by a RETI or by
+       external hardware.
+     - If LD A,I or LD A,R is interrupted, the P/V flag comes back as 0
+       even though interrupts were enabled.  This is the IFF2 bug; the
+       Z80 developers' notes remark that it may also affect the CMOS
+       part.  [OBS]
+     - "Z80 INT Skip" v5.0 (Helcmanovsky, 2026-10-05) measured, on
+       Zilog NMOS and CMOS hardware, that long blocks of DD, FD or
+       DD FD bytes do NOT let an INT be accepted, and neither do blocks
+       of EI or DI; a block of SCF+CCF does.  The straightforward
+       explanation for DD/FD is that no instruction boundary is reached,
+       and the interrupt test happens at an instruction boundary.  For
+       the EI block the consistent explanation is the same
+       fetch/execute overlap of PART V.3.2: EI writes IFF1 only after the
+       next opcode has already been fetched, so in a pure EI chain the
+       fetch never sees IFF1 set.  [HYP for the EI mechanism; the
+       measurement itself is HW]
+     - The practical consequence for this tree is already handled: the
+       tick ISR is entered through the IM2 table at 0080h and the IM1
+       vector at 0038h is a floor under the mode the boot stub leaves
+       behind.  A prefix chain cannot defer a tick.
+
+5.2 RESET and power-on state.  One RESET takes 3 T: IFF1, IFF2 and the
+     interrupt mode go to 0, PC = 0, I = 0, R = 0, SP = 0FFFFh, A = 0FFh
+     and F = 0FFh.  Miguel Angel Rodriguez Jodar's "Z80 Initial
+     Condition Retriever" (30 May 2011) is the tool that measured the
+     power-on and reset states separately, and the redcode emulator
+     credits his and Matthew Ownby's research for its power-on model.
+     R = 0 after reset, as stated in PART III.7.  [HW]
+     Two things RESET does NOT do on the real part: it does not
+     necessarily define which physical register is A and which is A'
+     (PART V.3.2), and the claim in older literature that AF after reset
+     is FFFFh traces back to a citation in Young whose original source
+     is no longer reachable - F = 0FFh is the measured value, AF' is
+     [UNK].  [HW for F]
+
+5.3 The special reset and the halted-CPU bug (Tony Brewer, article
+    December 2014, US patent 4486827 granted 4 December 1984;
+    bug confirmed May 2022, first seen 2014).  [HW]
+    Besides the normal reset the CPU has a SPECIAL reset that zeroes PC
+    only and changes nothing else.  It is triggered when /RESET is low
+    at the rising edge of M1T2 only; if /RESET is low at any other
+    rising clock edge the reset is normal.  Zilog's "at least three
+    clock cycles" requirement does not survive testing - 1T and 2T
+    pulses work.
+    The bug: if a special reset lands while the CPU is halted, PC is one
+    less than it should be for the rest of that instruction.  So a
+    multi-byte instruction after HALT misbehaves: LD r,n loads the
+    opcode instead of n; a 16-bit immediate is shifted; DD/FD simply
+    cost 4 T extra; CB XX becomes CB CB = SET 1,E; ED XX becomes ED ED,
+    a harmless 8 T NOP; CALL/RST push a return address one too low;
+    CALL/DJNZ/JR/JP take the wrong branch address into WZ.  Single-byte
+    non-branching instructions are unaffected.  Registers other than PC
+    keep their values.  Not relevant to Muzix's boot stub (which uses a
+    plain reset), but it is the reason an emulator must not model reset
+    as "zero everything".
+
+5.4 Repeat prefixes and prefix runs.  The rule "the last DD/FD in a run
+    wins" is confirmed by the FDDD2/Z80-DDFD3 hardware tests.  DD DD E5
+    is PUSH IX, not PUSH HL, and a 64 KiB field of FD DD puts the CPU in
+    a prefix loop from which only RESET releases it.  [HW]
+
+-------------------------------------------------------------------------------
+6. NEW INSTRUCTIONS AND NEW OPCODES: NONE FOUND
+-------------------------------------------------------------------------------
+Checked for genuinely new Z80 instructions or opcode assignments in the
+primary sources above and in J. G. Harston's "Full Z80 Opcode List
+Including Undocumented Opcodes" v0.11 (15 April 1998, mdfs.net) and its
+2008 revision, which enumerates the whole 256-entry space for each of the
+plain, DD, CB, FD CB and ED pages.
+
+Result: no new instruction or encoding has been found.  The full opcode
+space of the plain, CB, DD, ED, DD CB and FD CB pages is accounted for by
+the documented set plus the undocumented set already listed in PART II.
+The only entries in Harston's list that are not Z80 instructions are the
+"MOS_*" names in the ED page, which are Acorn MOS service-call
+conventions reached by putting an RST-style opcode on the bus in
+interrupt mode 0 - a host-side convention, not extra CPU opcodes.
+
+What is sometimes mistaken for a new instruction is not:
+  - IXH/IXL/IYH/IYL, SLL and the DDCB register-write-back forms: known
+    since before 2005 and already in PART II.
+  - Assembler mnemonics that expand to several bytes: a naming choice,
+    not a new instruction.
+  - Flag or timing refinements: PART V.1 and III are of this kind.
+  - Prefix combinations: already covered by PART II.5 and PART V.5.4.
+Z80-derivatives such as the Z180 and eZ80 do add real instructions, but
+they are different chips and are out of scope for this file.
+
+-------------------------------------------------------------------------------
+7. WHAT REMAINS UNRESOLVED
+-------------------------------------------------------------------------------
+  - Whether the "flag latches" behind the SCF/CCF behaviour form a
+    physically identifiable register or a distributed set of latches.
+    Q is a working abstraction, not an identified structure.  [UNK]
+  - The SCF/CCF result on a random or unstable CPU/board pair.  No
+    deterministic rule exists; the stability tests are the only tool.
+    [UNK]
+  - MEMPTR when LDIR/LDDR is entered with BC = 0 (the count wraps).
+    [UNK]
+  - MEMPTR and Q on the U880D / U880DC08.  [UNK]
+  - The value of AF' at power-up, and which physical register the
+    renaming flip flops select after reset.  [UNK]
+  - Independent confirmation of the DD/FD-before-SCF/CCF rule, which
+    currently rests on one hardware-tested source.  [OBS]
+  - A hardware MEMPTR test on this specific board.  PART III.1 gives the
+    readback routines; nothing in this tree has run them on the Zeta
+    SBC V2 yet.

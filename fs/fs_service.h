@@ -1,7 +1,6 @@
 #ifndef MUZIX_FS_SERVICE_H
 #define MUZIX_FS_SERVICE_H
 
-#include "../kernel/system_task.h"
 #include "block_device.h"
 #include "block_cache.h"
 #include "inode_table.h"
@@ -9,6 +8,7 @@
 #include "path.h"
 #include "volume.h"
 #include "tty_device.h"
+#include <stddef.h>
 
 /* Descriptor table (file numbers) and description table (open file objects) are
  * separate capacities.  Sharing one count of 4 made pipe() impossible: the
@@ -60,7 +60,7 @@ typedef struct {
 } muzix_fs_dirent_t;
 
 typedef struct muzix_fs_service {
-    muzix_system_task_t *system_task;
+    void *system_task;
     muzix_block_device_t *device;
     muzix_fs_block_cache_t *cache;
     muzix_fs_inode_table_t *inodes;
@@ -92,7 +92,7 @@ typedef struct muzix_fs_service {
 } muzix_fs_service_t;
 
 void muzix_fs_service_init(muzix_fs_service_t *fs,
-                           muzix_system_task_t *system_task,
+                           void *system_task,
                            uint8_t source);
 void muzix_fs_service_set_device(muzix_fs_service_t *fs,
                                                                  muzix_block_device_t *device);
@@ -138,7 +138,7 @@ int muzix_fs_service_mknod_path(muzix_fs_service_t *fs,
                                 uint16_t euid,
                                 uint16_t umask);
 int muzix_fs_service_chdir(muzix_fs_service_t *fs, const char *path);
-int muzix_fs_service_getcwd(muzix_fs_service_t *fs,
+int muzix_fs_service_getcwd(const muzix_fs_service_t *fs,
                             char *buffer,
                             size_t size);
 int muzix_fs_service_close(muzix_fs_service_t *fs, int handle);
@@ -211,11 +211,10 @@ int muzix_fs_service_read_inode(muzix_fs_service_t *fs,
                                 size_t length,
                                 size_t *result);
 int muzix_fs_service_write_inode(muzix_fs_service_t *fs,
-                                 uint16_t inode,
-                                 uint32_t position,
-                                 const uint8_t *buffer,
-                                 size_t length,
-                                 size_t *result);
-
+                                  uint16_t inode,
+                                  uint32_t position,
+                                  const uint8_t *buffer,
+                                  size_t length,
+                                  size_t *result);
 
 #endif

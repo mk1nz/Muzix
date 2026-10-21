@@ -2,19 +2,29 @@
 
 ## Current State
 
-Muzix is an independent Z80 operating-system implementation that reuses
-selected MINIX 1.0 concepts and the MINIX-v1 filesystem format. It is not a
-MINIX or FUZIX port. The source tree builds successfully with the focused Z80
-target:
+Muzix is an operating system for the Z80 and Zeta SBC V2, built on ideas
+from MINIX 1.0 (message-passing IPC, MINIX-v1 filesystem format). The source tree
+builds successfully with the focused Z80 target:
 
 ```text
 Z80 target build: PASS
 ```
 
+(the `make check` / `make rom` results below are recorded run results from the
+time of writing, 2026-10-14 reconciliation; re-run them to refresh — they were
+not re-executed for this edit)
+
 The repository includes the kernel process table and cooperative scheduler,
 memory and filesystem services, userspace syscall wrappers, TTY/device
 abstractions, and host-side regression tests. The current Makefile does not
 build a suite of Z80 `.ihx` test binaries.
+
+Architecture snapshot (verified 2026-10-14 against the tree): the process table
+holds 8 slots (`MUZIX_PROC_TABLE_MAX`, `kernel/proc_table.h:13`); boot forks the
+FS, MM and PM servers into slots 2/3/4, registered with the server numbers
+`MUZIX_PROC_FS`/`MUZIX_PROC_MM`/`MUZIX_PROC_PM`
+(`include/muzix_ipc.h:206-208`, `kernel/kernel_main.c:295-325`), and the
+userspace shell into slot 1 as PID 1 (`kernel/kernel_main.c:329`).
 
 ## Implemented Functionality
 
@@ -43,7 +53,7 @@ build a suite of Z80 `.ihx` test binaries.
 
 ## Validation
 
-The following commands passed against the current source:
+The following commands were recorded as passing against the current source:
 
 ```sh
 make check
@@ -51,16 +61,21 @@ make clean && make rom
 ```
 
 `make rom` is the supported image build. `make check` completed all source
-gates. The host runner discovered 31 test sources: 8 executed and passed; 23
+gates. The host runner (`tools/host_tests.rb`) discovers `test_*.c` under
+`kernel/`, `fs/`, `mm/`, `pm/` and `platform/zeta-v2/`; it discovered 31 test
+sources: 8 executed and passed; 23
 were not executed because they require target-specific behavior or are not
-portable to the host harness. These build commands do not prove an emulator
+portable to the host harness (counts from the recorded run summarized in
+`AGENTS.md`, consistent with the current tree's test inventory; re-run
+`make test-host` to refresh). These build commands do not prove an emulator
 or hardware boot.
 
 The built ROM was also smoke-tested in z80pack with stdin forwarding: the
 userspace shell started, accepted `uptime`, and the external program printed a
 result from the ROM-backed filesystem. The boot log had no `MNT FAIL` marker.
 This is emulator evidence for one boot and command, not a hardware test or
-proof of the entire userspace command set.
+proof of the entire userspace command set. (Smoke-test result checked against
+the current tree and `AGENTS.md`'s recorded run, 2026-10-14.)
 
 ## Known Boundaries
 
@@ -85,9 +100,11 @@ proof of the entire userspace command set.
   frames are not implemented.
 - The UNA scripts are separate from the ROM build; do not infer that the
   ordinary `make rom` path exercises UNA firmware handoff.
-- Generic block special files, other character devices, full MINIX IPC, the
-  complete MM service, and the full 69-call MINIX ABI remain out of scope for
-  this source-level milestone.
+- Generic block special files, other character devices, MINIX suspend/revive
+  queues, and the full 69-call MINIX ABI remain out of scope for this
+  source-level milestone. Muzix's own IPC core and its MM server (slot 3,
+  forked at boot in `kernel/kernel_main.c:307-315`) are implemented; what is
+  missing is MINIX compatibility, not the mechanism.
 
 ## Historical Boot Failure Investigation (2026-09-18)
 
@@ -125,7 +142,9 @@ DEBUG: cache_get: bad args     # crash
 PC: 0x00B3 SP: 0xFE02
 ```
 
-Final PC=0x00B3 is `halt` in `kernel_entry.s:34`, meaning the 4th `kernel_main`
+Final PC=0x00B3 is `halt` in `kernel_entry.s:34` (line reference is from the
+2026-09-18 snapshot; `_halt` is now at `platform/zeta-v2/kernel_entry.s:100-102`,
+verified 2026-10-14), meaning the 4th `kernel_main`
 returned normally into `_halt`.
 
 ### Original root-cause hypothesis: write-only bank selector readback

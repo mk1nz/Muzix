@@ -105,6 +105,27 @@ start:
     push hl
     call _exit
 
+; uart_hex: print byte in A as two hex digits to UART 0x68
+uart_hex:
+    push af
+    rra
+    rra
+    rra
+    rra
+    call uart_nibble
+    pop af
+    call uart_nibble
+    ret
+
+uart_nibble:
+    and #0x0F
+    add a, #0x90
+    daa
+    adc a, #0x40
+    daa
+    out (0x68), a
+    ret
+
 ; memcpy_init: copy BC bytes from HL to DE
 ; Preserves: none
 memcpy_init:

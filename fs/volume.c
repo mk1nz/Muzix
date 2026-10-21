@@ -1,14 +1,19 @@
 #include "volume.h"
 
 #include <string.h>
-#include "../platform/zeta-v2/uart_io.h"
-#include "../platform/zeta-v2/trace.h"
 
 #define MUZIX_FS_ALLOCATOR_BLOCK 2u
 #define MUZIX_FS_INODE_BLOCK 3u
-#define MUZIX_FS_ROOT_DIRECTORY_BLOCK 4u
+/* The image's geometry, taken from tools/make_minixfs.rb: block 2 is the zone
+ * allocator, the inode table is TWO blocks (3 and 4) and the root directory is
+ * block 5, so the first block any file may own is 6.  These were 4 and 5, one
+ * block low, so the library read the root directory out of the second inode
+ * block and handed block 4 out as file data.  kernel/exec_loader.c agrees with
+ * the tool: it reads the root directory at block 5 and picks the inode block
+ * with 3 + (inode >> 4). */
+#define MUZIX_FS_ROOT_DIRECTORY_BLOCK 5u
 #define MUZIX_FS_ROOT_INODE 1u
-#define MUZIX_FS_FIRST_DATA_BLOCK 5u
+#define MUZIX_FS_FIRST_DATA_BLOCK 6u
 
 /* Formatting a volume is only ever done by tools/make_minixfs.rb, off-target,
  * and by the fs/test_* binaries. Nothing in a booted kernel calls it: the block
@@ -54,13 +59,13 @@ int muzix_fs_volume_flush(muzix_fs_volume_t *volume)
 }
 
 /* Reserve the metadata blocks (0 reserved, 1 superblock, 2 zone allocator,
- * 3 inode table, 4 root directory) in a freshly formatted zone bitmap.  The
- * image tool marks them too, and muzix_fs_allocator_load now insists on it.
- * Without it muzix_fs_zone_is_used(4) reported the root directory as free, and
- * only the fact that muzix_fs_zone_alloc starts at first_data_zone kept
- * anything from handing block 4 to a file.  The bit layout is the one
- * muzix_fs_zone_is_used reads, so it is written out here rather than through
- * the allocator, whose mark helper is private. */
+ * 3 inode table, 4 inode table, 5 root directory) in a freshly formatted zone
+ * bitmap.  The image tool marks them too, and muzix_fs_allocator_load now
+ * insists on it.  Without it muzix_fs_zone_is_used(5) reported the root
+ * directory as free, and only the fact that muzix_fs_zone_alloc starts at
+ * first_data_zone kept anything from handing block 5 to a file.  The bit
+ * layout is the one muzix_fs_zone_is_used reads, so it is written out here
+ * rather than through the allocator, whose mark helper is private. */
 static void muzix_fs_volume_reserve_metadata(muzix_fs_zone_allocator_t *allocator)
 {
     uint16_t zone;
@@ -113,7 +118,13 @@ int muzix_fs_volume_mount(muzix_fs_volume_t *volume)
     if (muzix_fs_superblock_load(&volume->superblock) != 0) {
         return -1;
     }
-    if (volume->superblock.value.ninodes > MUZIX_FS_INODE_SLOTS ||
+    /* The inode count is checked against what the on-disk table can hold -
+     * MUZIX_FS_INODE_TABLE_BLOCKS blocks of MUZIX_FS_INODE_SLOTS records - and
+     * not against the slot count: a tool-shaped image declares MAX_INODES = 18
+     * so its two blocks describe sixteen files, and refusing it for carrying
+     * more inodes than one block holds would make every real image unmountable.
+     * The library still addresses the first block only. */
+    if (volume->superblock.value.ninodes > MUZIX_FS_INODE_TABLE_RECORDS ||
         volume->superblock.value.nzones > volume->device->block_count ||
         volume->superblock.value.first_data_zone < MUZIX_FS_FIRST_DATA_BLOCK) {
         return -1;

@@ -33,7 +33,23 @@
 
 require 'open3'
 
-DIRS = ARGV.empty? ? %w[apps shell] : ARGV
+# Every userspace link script in the tree: the apps, the shell and the three
+# servers.  The Makefile links servers/fs/fs_server.lk, servers/mm/mm_server.lk
+# and servers/pm/pm_server.lk into the ROM exactly as it links apps/*.lk and
+# shell/shell.lk, and a module dropped out of one of them is the same failure
+# this gate exists for: the image links, every size check passes, and the
+# unresolved calls reach 0x0000 at run time.  The old default was %w[apps shell]
+# - written when the servers were kernel-side - so their third of the tree was
+# never re-linked here.  `**` spans the per-server subdirectory, and this one
+# list feeds both the count below and the re-link loop, so the two halves of the
+# gate cannot drift apart the way the file list and the DIRS default just had.
+DIRS = ARGV.empty? ? %w[apps shell servers] : ARGV
+LINKS = DIRS.flat_map { |dir| Dir.glob(File.join(dir, '**', '*.lk')) }.sort
+
+if LINKS.empty?
+  abort "FAIL: no userspace link scripts found under #{DIRS.join(', ')}; " \
+        "this gate is looking at nothing"
+end
 
 # A warning is the finding.  An error is reported too, because a link that
 # failed outright would otherwise leave a stale .ihx behind and this gate would
@@ -43,17 +59,19 @@ FINDING = /(Undefined Global|ASlink-Error|ASlink-Warning-Unresolved)/
 failures = []
 links = 0
 
-DIRS.each do |dir|
-  Dir.glob(File.join(dir, '*.lk')).sort.each do |lk|
-    name = File.basename(lk, '.lk')
-    next unless File.file?(lk)
+LINKS.each do |lk|
+  next unless File.file?(lk)
 
-    links += 1
-    out, _status = Open3.capture2e(ENV.fetch('SDLDZ80', 'sdldz80'),
-                                   '-f', "#{name}.lk", chdir: dir)
-    out.each_line do |line|
-      failures << "#{dir}/#{name}: #{line.strip}" if line =~ FINDING
-    end
+  # Each link script resolves its inputs relative to its own directory
+  # (apps/../../lib/... or servers/mm/../../mm/...), so the linker runs there -
+  # which is what the Makefile's link rules do.
+  dir = File.dirname(lk)
+  name = File.basename(lk, '.lk')
+  links += 1
+  out, _status = Open3.capture2e(ENV.fetch('SDLDZ80', 'sdldz80'),
+                                 '-f', "#{name}.lk", chdir: dir)
+  out.each_line do |line|
+    failures << "#{lk}: #{line.strip}" if line =~ FINDING
   end
 end
 

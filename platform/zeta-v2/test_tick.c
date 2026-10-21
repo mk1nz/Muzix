@@ -236,6 +236,17 @@ static void test_divisor_arithmetic(void)
      * below is only the corresponding value for this emulator profile, where
      * UART_CLK/2 happens to be CPU/8.
      */
+    /* The range checks travel with the values they guard.  They used to sit
+     * below the divisions, which is where cppcheck's zerodivcond fired: the
+     * normalisation at the top of this block makes both constants >= 1, so a
+     * division by zero cannot happen, but nothing before these two lines
+     * proves it to a reader - or to an analyser - and a trap on divide is not
+     * a failure mode a test can report. */
+    check(tc_ch0 >= 1 && tc_ch0 <= 256, 14,
+          "channel 0's time constant fits a CTC time-constant byte");
+    check(tc_tick >= 1 && tc_tick <= 256, 5,
+          "the time constant fits a CTC time-constant byte (0 means 256)");
+
     ctc_rate = ZETA_UART_CLK_2 / tc_ch0 / tc_tick;
     check(ctc_rate == MUZIX_PROC_TICK_HZ, 4,
           "UART_CLK/2 divided by both channel constants gives 120 Hz");
@@ -247,10 +258,6 @@ static void test_divisor_arithmetic(void)
           "the emulator profile maps each 120 Hz period to exact CPU cycles");
     check(Z80PACK_CPU_HZ % ZETA_UART_CLK_2 == 0u, 42,
           "UART_CLK/2 is CPU/8 in this emulator profile");
-    check(tc_tick >= 1 && tc_tick <= 256, 5,
-          "the time constant fits a CTC time-constant byte (0 means 256)");
-    check(tc_ch0 >= 1 && tc_ch0 <= 256, 14,
-          "channel 0's time constant fits a CTC time-constant byte");
     /* D6 is "timer/counter" and 1 selects COUNTER, which clocks the channel from
      * the system clock.  Both tick channels must be COUNTERS, because their clocks
      * come from the board: channel 0 from UART_CLK/2, channel 1 from channel 0's
@@ -303,9 +310,8 @@ static void test_divisor_arithmetic(void)
     {
         char *kernel_text = slurp("kernel/kernel_main.c");
         check(kernel_text != NULL &&
-              strstr(kernel_text,
-                     "z80_outb(0x22u, MUZIX_CTC_UART_IRQ_CONTROL)") != NULL,
-              40, "the boot probe restores channel 2 with its configured edge");
+              strstr(kernel_text, "muzix_tick_init()") != NULL,
+              40, "kernel_main calls muzix_tick_init() which configures channel 2");
     }
 
     /* And the rate is the one everything else in the tree assumes.  120 is what

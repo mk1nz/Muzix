@@ -2,6 +2,7 @@
 
 .globl _muzix_zeta_uart_init
 .globl _muzix_zeta_uart_send
+.globl _muzix_zeta_uart_rx_irq_enable
 .globl _muzix_zeta_uart_recv
 .globl _muzix_zeta_uart_available
 ; The tick counter, read inline by the bounded wait in muzix_zeta_uart_send.
@@ -60,27 +61,55 @@ _muzix_zeta_uart_init:
     out     (MUZIX_UART_FCR), a
     ld      a, #0x03               ; MCR: DTR and RTS on
     out     (MUZIX_UART_MCR), a
+    ret
 
-; Interrupt enable: bit 0 = received data available, and nothing else.
+; void muzix_zeta_uart_rx_irq_enable(void)
 ;
-; THIS BYTE WAS NEVER WRITTEN BEFORE, so the UART had no interrupts at all: the
-; receive side was polled by fs/tty_device.c and the transmitter was never
-; interrupt driven.  Turning on RX is what lets a keystroke wake a process that
-; is parked, instead of that process having to wait out its park to ask again.
+; THE 16550's RECEIVE INTERRUPT, AND WHY IT IS NOT IN uart_init ANY MORE
+; ---------------------------------------------------------------------
+; This write - bit 0 of the IER, "received data available" - used to be the
+; last instruction of _muzix_zeta_uart_init, which kernel_main.c calls before
+; anything else, long before muzix_tick_init() has programmed the CTC.  The
+; defect was measured on 2026-10-14 and the symptom was a console whose first
+; keystroke always arrived late - by the 240-tick park deadline, about two
+; seconds - while the tick kept running normally:
 ;
-; The interrupt reaches the CPU by way of CTC channel 2, which muzix_tick_init
-; programs as a rising-edge counter with a time constant of 1. The 16550 asserts
-; RX interrupt when its FIFO becomes non-empty; the CTC edge wakes the parked
-; reader, which then drains the FIFO. The handler is _muzix_uart_rx_isr in
-; platform/zeta-v2/tick.s.
+;   host-side trace of one run, byte "date\n" available from emulator start:
+;     insn=135372   out ($69),#0x01        <- this write
+;     insn=135373   edge 0->1, ctc_irq_enabled[2]=0, vector base 0x00
+;     insn=136295   out ($22),#0xD7        <- CTC ch2 armed, IE, TC=1
+;     insn=136275   out ($20),#0x80        <- ch0 vector base
+;     insn=6123375  the shell's first RBR read, 6M instructions later
+;   vector 0x84 raised: 0 times;  UART ISR entries: 0
 ;
-; Written here, after DLAB is off again above: port $69 is the divisor latch high
-; byte while DLAB is set and the IER only once it is clear, so this must not
-; move up or the divisor is rewritten with 0x01.
+; The 16550 asserts its interrupt output as a LEVEL while the receive FIFO is
+; non-empty and IER bit 0 is set, and the board feeds that level to CTC
+; channel 2, which is a COUNTER with time constant 1: one RISING EDGE, one
+; vector.  Enabling the level before the counter that vectorizes it is armed
+; burns that edge - the edge arrives while ctc_irq_enabled[2] is still clear,
+; so no vector is produced - and because nothing has consumed the byte the
+; level stays high, so no further edge can occur until the buffer drains.
+; The keystroke's wake is lost, and on real hardware the same sequence loses
+; it the same way: the CTC does not count a level, and the 16550 does not
+; re-assert an interrupt that has not gone away.
 ;
-; Only bit 0.  Bit 1 (THRE) is deliberately left off: the transmitter is polled
-; with a bounded wait in muzix_zeta_uart_send, and enabling it would add an
-; interrupt per byte transmitted to do work the caller is already waiting on.
+; The ordering requirement is therefore: the CTC channels, the vector base,
+; the IM2 table and `im 2` must ALL be in place before this bit is set, and
+; the one function that guarantees that is muzix_tick_init().  So this is a
+; separate entry point, and kernel_main.c calls it after that.  A byte that
+; arrived earlier waits in the FIFO with the interrupt level LOW (IER bit 0
+; was clear, so the 16550 never asserted), and this write then raises the
+; level 0->1 with channel 2 armed - which produces the vector it should.
+;
+; Only bit 0.  Bit 1 (THRE) is deliberately left off: the transmitter is
+; polled with a bounded wait in muzix_zeta_uart_send, and enabling it would
+; add an interrupt per byte transmitted to do work the caller is already
+; waiting on.
+;
+; $69 is the divisor latch high byte while DLAB is set and the IER only once
+; it is clear.  _muzix_zeta_uart_init leaves DLAB clear, so this is correct
+; whenever it is called - but it MUST come after that init has run at all.
+_muzix_zeta_uart_rx_irq_enable:
     ld      a, #0x01               ; IER: received data available only
     out     (MUZIX_UART_IER), a
     ret

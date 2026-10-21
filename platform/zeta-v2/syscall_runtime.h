@@ -10,7 +10,6 @@
 typedef struct muzix_zeta_syscall_runtime {
     muzix_syscall_context_t kernel;
     muzix_userspace_syscall_context_t userspace;
-    muzix_tty_device_t tty;
     muzix_fs_service_t *fs;
     uint8_t bound;
 } muzix_zeta_syscall_runtime_t;

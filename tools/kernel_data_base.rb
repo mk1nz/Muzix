@@ -55,8 +55,10 @@ GRANULE = 0x100    # _DATA is page-aligned; costs at most 255 bytes of stack
 # do is now unmeasured rather than known-bad, and 411 bytes of room means
 # nothing needs it.
 
-MARGIN = 0x40      # room for the next few bytes of code growth
-GRANULE = 0x100    # _DATA is page-aligned; costs at most 255 bytes of stack
+# MARGIN and GRANULE are defined once, above (lines 23-25).  A second pair of
+# definitions used to sit here and printed "already initialized constant" on
+# every run; if you are looking for what they do, read the definitions at the
+# top of the file and the correction note below.
 
 # DO NOT "FIX" THE SPACE PROBLEM BY DROPPING GRANULE
 # =================================================

@@ -2,10 +2,11 @@
 
 ## Project Overview
 
-**Muzix** is an independent Z80 operating system for the Zeta SBC V2. It uses
-selected MINIX 1.0 concepts and the MINIX-v1 filesystem format, but has its own
-syscall ABI and implementation; it is not a MINIX or FUZIX port. Specific
-Zeta-specific routines adapted from FUZIX are attributed in the documentation.
+**Muzix** is an operating system for the Zeta SBC V2, built on ideas from
+MINIX 1.0 (message-passing IPC, priority queues, MINIX-v1 filesystem format)
+and adapted Zeta V2 hardware routines from FUZIX (DS1302, NS16550, bank-switch
+patterns). Muzix has its own process model, syscall ABI, scheduler, allocator,
+and filesystem.
 
 Run build and validation commands from this directory (`Muzix/`). The
 workspace layout is:
@@ -90,8 +91,9 @@ the compiled convention's registers; pushing them alone does not pass
   because it passes both gates:
 
   `sdz80_runtime.s` is the tempting place to look and it does **not** help - it
-  defines `___sdcc_call_hl` and `___sdcc_call_iy` and nothing else, so
-  `__mullong` does not resolve there.  Supply it from SDCC's own
+  defines `___sdcc_call_hl`, `___sdcc_call_iy` and the `--stack-auto` frame
+  entry `___sdcc_enter_ix`, and no multiply helper, so `__mullong` does not
+  resolve there.  Supply it from SDCC's own
   `lib/z80/z80.lib` and the link succeeds, and produces this:
 
       _CODE  0x0098  56 bytes
@@ -182,7 +184,10 @@ the compiled convention's registers; pushing them alone does not pass
   either.  What the kernel can measure is time, and it already accounts for it.
   The state is in `_DATA`, so the figures survive every process exit, and the
   update happens on read rather than in the tick handler - `tick.s` argues at
-  length that the handler may address only windows 0 and 3.
+  length why the handler's data cells all sit in window 0 (they are linked in
+  `_CODE`, which is what `build/kernel.map` and `tools/check_window0.rb`
+  verify), while the pushes it makes land on window 3 under the kernel map or
+  on window 1 when a process is interrupted.
 
 - **The `GRANULE = 0x100` alignment was never implicated.** An earlier
   version of this file blamed it: set `GRANULE = 1` and the machine broke 3 runs
@@ -212,13 +217,14 @@ the compiled convention's registers; pushing them alone does not pass
   memory directly; boot code and designated platform transition/copy routines
   are deliberate low-level exceptions.
 - Do not add ad-hoc bank-register writes or bank-crossing trampolines in higher
-  layers. Use the established MM and platform routines; the assembly transition
-  in `kernel_entry.s` and copy primitives in `context_switch.c` are intentional
-  parts of that mechanism.
-- **The platform copy primitives are the MM's alone.** `zeta_copy_user_to_kernel`,
+  layers. Use the established MM server and platform routines; the assembly
+  transition in `kernel_entry.s` and copy primitives in `context_switch.c` are
+  intentional parts of that mechanism.
+- **The platform copy primitives are the MM server's alone.** `zeta_copy_user_to_kernel`,
   `zeta_copy_kernel_to_user`, `zeta_copy_page_to_kernel` and
   `zeta_copy_rom_page_to_kernel` program the bank registers, so they are reached
-  only through the `muzix_mm_*` entry points in `mm/`. `tools/check_memory_manager.rb`
+  only through the `muzix_mm_*` entry points in `mm/`. The **MM server runs in
+  userspace (slot 3)** and exposes these via IPC. `tools/check_memory_manager.rb`
   enforces this and derives both the primitive set and the MM module set from the
   sources, so adding a caller is a build failure rather than a review comment.
 
@@ -246,11 +252,13 @@ architecture.
 
 | Subtree       | Contents                                                       |
 |---------------|----------------------------------------------------------------|
-| `kernel/`     | main, loop, startup, proc_table, system_task/service, syscalls, exec_loader, bootstrap, init_task, load, shell. **There is no `kernel/scheduler.c`** — the priority queues and the round-robin pick are `muzix_proc_table_pick_next()` in `proc_table.c` |
-| `mm/`         | mm_service, mm_copy, mproc_model, mem_map, memory             |
-| `fs/`         | fs_service, volume, block_device, block_cache, directory, inode_table, allocator, file_io, path, superblock, rom_block_device, tty_device |
+| `kernel/`     | main, loop, startup, proc_table, **ipc**, syscalls, exec_loader, bootstrap, init_task, load, shell. **There is no `kernel/scheduler.c`** — the priority queues and the round-robin pick are `muzix_proc_table_pick_next()` in `proc_table.c` |
+| `mm/`         | mm_service (kernel-linked), mm_copy, mproc_model, mem_map, memory — the userspace MM server at slot 3 is `servers/mm/mm_server.c` |
+| `fs/`         | fs_service, volume, block_device, block_cache, directory, inode_table, allocator, file_io, path, superblock, tty_device, fs_clock — the userspace FS server at slot 2 is `servers/fs/fs_server.c`; ROM block reads are `kernel/rom_read.c`, not `fs/` |
+| `pm/`         | **pm_server.c** (userspace server at slot 4) |
 | `platform/zeta-v2/` | bank_io, **context_switch** (owns the copy primitives), kernel_bank_model, kernel_entry, rom_boot, rtc_ds1302, sdz80_runtime, syscall_entry, syscall_runtime, syscall_vector, trace, uart_io, una_boot, una_stage2, z80_io, **tick** |
-| `lib/`        | libc, syscall, user_syscall, crt0, math, sdcc_runtime, tty_ioctl, proc_info, romfs_data |
+| `lib/`        | libc, syscall, user_syscall, crt0, math, sdcc_runtime, tty_ioctl, proc_info, romfs_data, **server** |
+| `servers/`    | fs_server, mm_server, pm_server — userspace microkernel servers |
 | `tools/`      | ihx_to_bin.rb, make_minixfs.rb, add_exec_header.rb, bootloader, and the `check_*.rb` gates |
 
 ### MINIX Reference Model in Tests
@@ -258,8 +266,9 @@ architecture.
 - `platform/zeta-v2/test_kernel/minix_adapter.*` models MINIX-style segment
   mapping for isolated tests; it is not part of the production ROM link.
 - The production process mapping and copy paths are implemented by
-  `mm/mproc_model.c`, `mm/mm_copy.c`, `kernel/exec_loader.c`, and the MM-owned
-  platform copy primitives. Do not treat the test adapter as the live path.
+  `mm/mproc_model.c`, `mm/mm_copy.c`, `kernel/exec_loader.c`, and the **MM server**
+  userspace (slot 3) platform copy primitives. Do not treat the test adapter as
+  the live path.
 
 ### Build System
 
@@ -268,9 +277,10 @@ architecture.
 - `make check` runs every gate (`test-kernel-layout`, `test-window0`,
   `test-syscall-context`, `test-user-pointers`, `test-link-scripts`,
   `test-emulator-sources`, `test-userspace-layout`, `test-userspace-runtime`,
-  `test-memory-manager`, `test-park-site`, `test-host`). The Z80 calling
-  convention check is included in `test-rom-image`, which runs as part of
-  `make rom`.
+  `test-memory-manager`, `test-park-site`, `test-proc-identity`,
+  `test-host`). The Z80 calling convention check (`test-z80-call-convention`)
+  is included in `test-rom-image`, which runs as part of `make rom`, not in
+  `make check`.
 - ROM image: 524 288 bytes, kernel at `0x0098`.
 - Boot stub: copies ROM pages 0–3 → RAM pages 32–35 via LDIR, then `jp 0x0098`.
 - `ihx_to_bin.rb` handles SDCC's `00:` prefix Intel HEX records.
@@ -280,16 +290,21 @@ architecture.
 
 ## Architecture Summary
 
-### System Stack
+### Architecture Summary
+
+#### System Stack
 
 ```
 Muzix userspace (shell + selected applications; custom syscall ABI)
         │
         ▼
-Kernel (process table, cooperative scheduler, syscalls, exec loader)
-  ├─ MM: physical-page allocation and mediated user-memory copies
-  ├─ PM: selected process-manager operations
-  └─ FS: ROM-backed filesystem and TTY service
+Kernel (minimal microkernel: IPC, scheduler, syscall entry, exec loader)
+        │
+        ▼ IPC
+Userspace Servers (launched at boot via fork/exec)
+  ├─ FS Server (slot 2) — filesystem operations
+  ├─ MM Server (slot 3) — physical-page allocation and mediated user-memory copies
+  └─ PM Server (slot 4) — process-manager operations
         │
         ▼
 Zeta V2 backend (bank mapping, syscall entry, UART, RTC, CTC)
@@ -297,6 +312,13 @@ Zeta V2 backend (bank mapping, syscall entry, UART, RTC, CTC)
         ▼
 Zeta SBC V2 (four 16 KiB windows; bank selectors $78–$7B; MPGENA $7C)
 ```
+
+The kernel's image size is not a fixed figure and this file deliberately
+carries no byte count: read the current extents from `build/kernel.map` or
+`make test-kernel-layout`, and do not copy a size out of notes into code or
+documentation. As of this writing the map reports `_CODE` 45,631 bytes (≈44.6
+KB) and `_DATA` 5,799 bytes, with `_DATA` derived from the linked `_CODE`
+extent by `tools/kernel_data_base.rb`.
 
 ### Z80 Memory Layout (Zeta SBC V2)
 
@@ -382,28 +404,48 @@ User syscalls (userspace-facing, custom numbering):
 |        |                 | 28     | SYS_CREAT   | 60     | SYS_UMASK       |
 |        |                 | 29     | SYS_LINK    | 48     | SYS_LOAD        |
 |        |                 | 15     | SYS_SETRTC  | 49     | SYS_PARK        |
-|        |                 | 16     | SYS_PROCTAB |        |                 |
+|        |                 | 16     | SYS_PROCTAB | 50     | SYS_IPC_SENDREC |
+|        |                 |        |             | 51     | SYS_IPC_COPY_TO_USER |
+|        |                 |        |             | 52     | SYS_IPC_COPY_FROM_USER |
+|        |                 |        |             | 53     | SYS_IPC_SRV_COPY_TO_CLIENT |
+|        |                 |        |             | 54     | SYS_IPC_SRV_COPY_FROM_CLIENT |
+|        |                 |        |             | 55     | SYS_IPC_SEND    |
 
 **Note**: Muzix defines a custom syscall numbering scheme that is NOT Minix
 compatible (Minix has 69 call slots with different numbering, and Muzix's own
-numbering has gaps: 42 calls spread over 1–60). See
+numbering has gaps: 48 numbers spread over 1–60 — the 42 above plus the six IPC
+calls 50–55 defined in `lib/syscall.h` and dispatched in
+`kernel/syscalls_ipc.c`). See
 `docs/minix-muzix-audit.md` at the repository root for the full audit.
+
+**Two numbering schemes, one router.** The kernel-internal `MUZIX_SYS_*`
+numbers (`kernel/syscalls.h`: 0/1/10/11) are a separate namespace from the user
+numbers above, and the low end collides numerically — `MUZIX_SYS_COPY`=1 is
+user `SYS_FORK`, `MUZIX_SYS_YIELD`=10 is user `SYS_OPEN`, `MUZIX_SYS_EXIT`=11
+is user `SYS_CLOSE`. They are disambiguated by the order
+`muzix_syscall_to_server()` (`kernel/syscalls_ipc.c`) and the local dispatch
+test them in — the internal numbers are matched before the server ranges — and
+not by renumbering, so do not assume one number means the same call on both
+paths.
 
 ### Process Model
 
 - `muzix_proc_slot_t`: pid, parent_pid, flags, exit_status, pending_signals,
   stack_ptr, entry_point, uid/gid/euid/egid/umask, user/sys time, child time,
   ready-link, mproc, bank map.
-- `muzix_kernel_proc_table_t`: fixed-size table (MUZIX_PROC_TABLE_MAX=4),
-  3 priority queues (TASK_Q=0, SERVER_Q=1, USER_Q=2), kernel_map.
+- `muzix_kernel_proc_table_t`: fixed-size table (MUZIX_PROC_TABLE_MAX=8,
+  `kernel/proc_table.h`), 3 priority queues (TASK_Q=0, SERVER_Q=1, USER_Q=2),
+  kernel_map.
 - Scheduler: round-robin within each priority queue; priority order TASK > SERVER > USER.
 - Cooperative (non-preemptive): a process runs until it parks, blocks, or exits.
   There is a 120 Hz CTC tick interrupt and it **still does not switch processes
   — there is no preemption, and nothing about the interrupt path implies
   there will be.** The tick counts, it bounds every deadline, and it makes
   `UTIME`/`STIME` real; preempting from it is a separate change, and the
-  argument in `platform/zeta-v2/tick.s` about why the handler may touch only
-  windows 0 and 3 is exactly what such a switch would invalidate.
+  argument in `platform/zeta-v2/tick.s` about which windows the handler may
+  touch — its data cells only in window 0, its pushes on window 3 under the
+  kernel map or window 1 on the interrupted process's own stack — is exactly
+  what such a switch would invalidate.
 - The tick is no longer the only interrupt. The same CTC runs a second,
   vectored one for the UART (`im 2`, vector 0x84), so a keystroke interrupts
   the machine instead of waiting out whatever deadline a reader is parked on.
@@ -424,6 +466,96 @@ numbering has gaps: 42 calls spread over 1–60). See
   0x21 and yields kernel code bytes. `tools/check_park_site.rb` fails the
   build if a `park()` call site attributes that capture to any slot other than
   `muzix_current_slot(ctx)`.
+
+### Process Identity (one number, one owner)
+
+**A process has ONE number, and it is the same integer the scheduler calls a
+slot.** A user process and the IPC entry that describes it share it.
+
+This was not always so, and the details matter because the failure mode is
+invisible at every individual call site:
+
+- `muzix_ipc_proc_t` lives in `procs[]`, and `procs[]` does **not** index from
+  zero. The first `NR_TASKS` entries hold the negative system-task numbers
+  (MINIX put them there), so a process number `nr` sits at index
+  `NR_TASKS + nr`. **That `NR_TASKS +` is an array offset, not a property of
+  the process.**
+- Five sites added that offset to a number and then used the result as a
+  process number. Each was plausible alone, each was wrong, and each was
+  invisible until the machine ran:
+  - `kernel/syscalls_ipc.c`: `ipc_slot = 10 + current_slot`, used as `caller`.
+    `get_proc()` then computed `procs[10 + (10 + slot)]` — nobody registered
+    there, so every send and receive was addressed to a dead entry.
+  - `kernel/syscalls_ipc.c`: `muzix_ipc_server_slot()` returned `10 + slot`,
+    fed straight in as a routed syscall's destination.
+  - `kernel/syscalls_ipc.c`: `ipc_client = msg.m_source`, unconverted. The only
+    readers (`SRV_COPY` handlers) pass it to `muzix_copy_*_proc()`, which
+    rejects `target_slot >= MUZIX_PROC_TABLE_MAX`. So every server-to-client
+    copy returned `EFAULT` — the same code a genuinely bad address returns.
+  - `shell/shell.c`: `#define FS_SERVER_IPC_SLOT 11`, a hand-written guess at
+    `10 + server_id`.
+  - `lib/server.c`: `server->ipc_slot = 10 + id`. Dead code — nothing read it —
+    which is precisely why nothing caught it.
+
+**The rule, enforced by `tools/check_proc_identity.rb` (target
+`test-proc-identity`, part of `make check`):**
+
+1. The process number IS the kernel proc-table slot. Do not convert between
+   them; there is nothing to convert.
+2. `muzix_ipc_proc()` in `kernel/ipc.c` is the **only** function that indexes
+   `procs[]` or performs the `NR_TASKS +` arithmetic. Its inverse,
+   `muzix_ipc_proc_nr()`, reads a number stamped into the entry at init rather
+   than deriving it — because `rp - procs` widened to `__divsint` once
+   `p_msg` made `sizeof` a non-power-of-two, and `KERNEL_LINK_ORDER` links no
+   `.lib`, so that is a link failure.
+3. Server numbers are `MUZIX_PROC_FS` / `MUZIX_PROC_MM` / `MUZIX_PROC_PM` in
+   `include/muzix_ipc.h`. Never compute one from an id or a slot.
+4. `muzix_ipc_get_proc()` is deprecated and must not gain new callers.
+
+The gate is deliberately narrow — `value * 10 + digit` in `libc` is decimal
+arithmetic and is *not* an offence — because a gate that fires on unrelated
+code gets switched off, and then it protects nothing. A regression is verified
+by injecting `10 + current_slot` and confirming the gate fails.
+
+### Deferred Copy-Out (resolved — delivered at resume)
+
+Servers fork, park, are readied and answered, and the reply reaches the
+caller's userspace buffer. The gap used to be the last step of a reply, and the
+mechanism that closed it is in `kernel/syscalls_ipc.c`, in the syscall layer
+that already holds `ctx`:
+
+When a server's reply arrives, `mini_send()` delivers it into
+`caller_ptr->p_msg` — the IPC entry's own buffer, which survives the switch
+because it lives in the table and not on any stack. It used never to reach the
+caller's userspace buffer, because the syscall handler frame that would do the
+`copy_to_user()` is already gone: `muzix_kernel_switchout()` either publishes
+another slot's resume point and returns, or calls
+`muzix_zeta_enter_userspace()` and never returns at all. Doing the copy in
+`kernel/ipc.c` was not the answer either — `tools/check_memory_manager.rb`
+admits a bank-crossing caller only from a file that **defines** an
+`muzix_mm_*` function, and `ipc.c` defines none.
+
+The implemented fix copies at delivery time:
+
+- `muzix_syscalls_note_recv_buffer()` stamps `p_user_addr` on the parked
+  slot's IPC entry while the caller is still running — the only moment its own
+  buffer address exists, because after the park the frame that held it is
+  abandoned.
+- `muzix_syscalls_deliver_parked()` runs in the delivering syscall, on a
+  kernel stack that is still live, before the caller is readied: it copies
+  `p_msg` into the recorded `p_user_addr` through `muzix_copy_to_proc()`
+  (which forwards to `muzix_mm_copy_kernel_to_user()`, so the memory-manager
+  gate is satisfied), stamps the slot's `resume_ret` with the reply's `m1_i1`,
+  and clears `DELIVERED`. It is called from the send paths, immediately before
+  `muzix_proc_table_ready()`, so the copy happens on the way into the resume
+  rather than after it. A copy that is refused leaves `DELIVERED` set, and the
+  caller's next receive still collects the message by the old path.
+
+**For archaeology, the symptom while it was missing:** the caller parked,
+resumed with `resume_ret == 0`, and its `write()` returned 0; the shell read
+that as failure and exited — the trace went `SYS: num=0D` (write) then
+`SYS: num=03` (exit), which looked like a filesystem fault and was not one.
+
 
 ---
 
@@ -515,14 +647,16 @@ Sector 2 (LBA 2):  MUZ2 stage-2 (flat binary with 16-byte ABI header)
 LBA 2048:          Optional filesystem
 ```
 
-The MUZ2 header at LBA 2:
+The MUZ2 header at LBA 2 (what `tools/make_una_image.sh` writes):
 ```
 Offset 0:  Magic "MUZ2" (4 bytes)
-Offset 4:  ABI version (1 byte) + header size (1 byte)
+Offset 4:  ABI version (1 byte)
+Offset 5:  Header size (1 byte, 16)
 Offset 6:  Payload length (2 bytes, LE)
 Offset 8:  Total sectors (1 byte)
-Offset 9-15: Reserved
-Offset 16: Payload entry offset (16-byte LE pointer) → jumps to 0x0098
+Offset 10: Entry offset (1 byte, 16: the payload begins this many bytes into
+           the sector; bytes 9 and 11-15 are written zero, not reserved)
+Offset 16: Payload (flat binary)
 ```
 
 ---
@@ -661,7 +795,7 @@ make check
 # Also available individually: test-kernel-layout, test-window0,
 # test-syscall-context, test-user-pointers, test-link-scripts,
 # test-emulator-sources, test-userspace-layout, test-userspace-runtime,
-# test-memory-manager, test-park-site, test-host
+# test-memory-manager, test-park-site, test-proc-identity, test-host
 # test-z80-call-convention is run by test-rom-image, not by make check.
 
 # 3. Verify the ROM image (make rom already ran these)
@@ -820,11 +954,170 @@ old test inventories or warning line numbers as current build results.
   seconds; one second corresponds to 120 ticks.
 - Pipes are bounded and non-blocking; Minix suspend/revive queues not implemented.
 - `mknod` accepts only TTY character devices.
-- Minix syscall ABI incompatibility: Muzix uses custom numbering (42 calls)
-  vs Minix's 69 slots. See `docs/minix-muzix-audit.md` at the repository root.
+- Minix syscall ABI incompatibility: Muzix uses custom numbering (48 numbers:
+  42 non-IPC + 6 IPC) vs Minix's 69 slots. See `docs/minix-muzix-audit.md` at the
+  repository root.
 - Disk drivers (wini, floppy, printer) and 50+ MINIX user commands are not
   implemented.
 - Block size difference: Minix uses 1024-byte blocks; Muzix uses 512-byte.
+
+### Known gaps after the 2026-10-14 audit round
+
+- **Undocumented Z80 instructions — surveyed; the two wins from it applied
+  2026-10-15, the undocumented-specific verdicts unchanged.** The survey (IXH/IXL,
+  SLL, the DD CB group, the MEMPTR flag trap, Z180 portability, hardware tests
+  T1-T7) was in `docs/z80-undocumented-instructions.md`, now deleted. What landed:
+  (1) `EXX` + `EX AF,AF'` instead of pushing AF/BC/DE/HL in both interrupt
+  handlers — `platform/zeta-v2/tick.s`, measured on 2026-10-15 with
+  deterministic idle runs: the idle halt fraction went 64.25% → 65.01%, the
+  highest recorded, and the per-tick stack traffic 132T → 16T. **This makes
+  the alternate register set an ABI resource: EXX/EX AF,AF' belong to the
+  interrupt handlers and to nothing else** — the tree uses them nowhere else
+  today (verified by grep), and any future user outside an interrupt handler
+  silently corrupts one. (2) The page allocator's bitmap walk in
+  `platform/zeta-v2/bitmap_ops.s`: `zeta_memory_alloc_page()` scanned a
+  uint32_t mask with `(mask & (1u << index))` per step, which SDCC expands
+  into a fresh 32-bit variable shift every iteration — ~3.5k T-states over 32
+  bits against ~470T for the assembly byte-then-RRL walk, called through
+   `muzix_bitmap_alloc()`/`muzix_bitmap_release()`, with C reference
+   implementations in `test_host/bitmap_host.c` for the host gate. What did
+   NOT land and why: SLL has no `(x<<1)|1` pattern in the tree; the ED-prefix
+   SLL (ED 90-97) in the emulator had a carry-flag bug (`z->cf = val & 1`
+   instead of `z->cf = val >> 7`) that was caught and fixed by the new GROUP
+   19 in `z80test.c`; IXH/IXL cost +4T and +1 byte against H/L and win only
+   when registers are exhausted; the DD CB indexed forms (`BIT/RES/SET
+   b,(IX+d)`) win when the base is already in IX and the bit number is a
+   compile-time constant — in the bitmap walk the bit index is a run-time
+   value, so an indexed form costs an 8-way dispatch that measures worse than
+   the walk that is there; and the undocumented `DD CB rot→reg` forms and
+   `rtc_ds1302.c`'s `(src[i] >> j)` variable shift are a real but low-frequency
+   win (the RTC is read once per 30720 ticks) against a bit-exact protocol
+   with three documented traps, so it was left for a change with hardware in
+   hand. `z80test.c` now has test groups covering these: GROUP 19 (SLL
+   ED 90-97, 384 tests), GROUP 20 (DDCB/FDCB rotate+load, 17664 tests), GROUP
+   21 (DDCB/FDCB RES/SET+load, 17664 tests), GROUP 22 (IXH/IXL/IYH/IYL
+   operands, 1608 tests — LD nn, INC/DEC, LD r, ALU) — 37020 new tests, all
+   passing. sdasz80 accepts no DD/FD mnemonic at all — any future use is `.db`
+  with a decoding comment, and the hardware tests T1-T7 in the survey are the
+  prerequisite.
+
+- **FIXED 2026-10-14 (late) — `ls` printed nothing, and the cause was two
+  microkernel-transition defects plus a namespace collision.** (1) Children of
+  SYS_FORK were never registered in the IPC table: `muzix_ipc_register_server()`
+  had callers only for the four slots kernel_main() starts itself, so a forked
+  slot kept `P_SLOT_FREE` and every reply the FS server sent to it was refused
+  with E_BAD_DEST — measured: `MSEND bad: caller=12 dest=15 dflags=05`, 53
+  times in one run, the child parking and returning the park placeholder 0.
+  `muzix_handle_fork()` now registers the child (unregister+register, so slot
+  reuse is idempotent) and `muzix_handle_exit()` unregisters it. (2) The FS
+  server's file handlers are stubs — `servers/fs/fs_server.lk` links
+  fs_server + fs_clock + tty_device + the bank primitives and nothing else, so
+  handle_open/handle_readdir/handle_read/handle_stat answer -1. The kernel now
+  serves open/readdir/close for the ROM filesystem itself, from
+  `kernel/rom_read.c`'s `muzix_rom_open_path()` / `muzix_rom_readdir()` (the
+  same block device, the same MINIX-v1 walk the exec ROM path uses), intercepted
+  ahead of the routing table like TIMES/PROCTAB/RTC. A synthetic descriptor is
+  inode + 4, a range disjoint from the console's 0/1/2. (3) The userspace trap
+  path also answered `MUZIX_SYS_YIELD` — which is 10, which is also user
+  SYS_OPEN — before anything else, so every open() returned 0, a descriptor
+  that looks valid; that early intercept is deleted from the userspace path
+  (the internal numbers belong to the record-driven dispatcher), and the
+  kernel-side handlers take `(uint16_t)arg` because the trap sign-extends the
+  argument word (0x888A arrives as int32 0xFFFF888A). `ls` lists all 17
+  entries; the remaining FS stubs (`read`, `stat`, `seek`) mean `cat file` is
+  still not served, and the shell's one-shot `SYS_WAIT` still prints a prompt
+  mid-command-output — both pre-existing, neither part of that fix.
+
+
+Status section, not a wish list: each item below was found by the audit, was
+deliberately closed or deliberately accepted, and is recorded here so the next
+reader does not rediscover it as a bug. `AUDIT_FIX_PLAN.md` is the tracking
+document for the same round. Everything in this section is the state of a
+build that passes `make check`, `make rom` and the emulator smoke run.
+
+- **Boot-time performance — FIXED on 2026-10-14 (was the accepted
+  ~6 s against ~4 s deviation).** The exec path copies the program image
+  through the memory-manager primitives (`muzix_mm_copy_kernel_to_user`,
+  i.e. `zeta_copy_kernel_to_user`), and the cost was inside the primitive
+  itself: every 256-byte exec chunk was staged byte-by-byte through
+  `g_copy_staging` in C before the LDIR — about thirty instructions per byte
+  for a copy whose ldir is a twentieth of that. The temp map replaces exactly
+  one window and that window is always window 1 (a region-2 destination is
+  remapped into window 1, a region-1 destination is window 1, regions 0 and 3
+  are refused), so a source that lies entirely outside window 1 reads the
+  same bytes either side of the switch and needs no staging at all:
+  `zeta_copy_kernel_to_user` now ldirs straight out of the caller's buffer
+  when the source range does not intersect window 1, and stages only when it
+  does. Measured on 2026-10-14, same harness on 25bd81c, on the fixes before
+  this one, and on this change: `uptime` reports `up 0 days, 0:00:06`,
+  `0:00:06`, `0:00:04`; the shell banner arrives at 3.41M, 3.41M and 2.42M
+  instructions; and the idle halt fraction (no input, 120M cycles) is 54.29%,
+  54.13% and 64.31% — the last one is back to the pre-audit ~63% the audit
+  had cost. The copies still go through the one mechanism allowed to program
+  the banks; the gate is untouched, and the staging fallback is unchanged for
+  the window-1 source case that needs it.
+- **HIGH-15 — the kernel does not link the message-routed MM dispatcher.**
+  Three files are named `mm_service.c`. vpath order decides which one the
+  kernel gets (`kernel/` ahead of `mm/` and `servers/mm/`), so the kernel
+  image contains `kernel/mm_service.c`, whose page allocator and three copy
+  entry points are real and whose message-routed entry points (`newmap`,
+  `copy`, `load_map`, `load_kernel_map`, `cross_bank_call`,
+  `copy_page_to_kernel`, `refresh_visible`) are deliberate refusals. The real
+  dispatcher `mm/mm_service.c` — every method a
+  `muzix_system_task_handle_message()` call — is linked only into the
+  userspace MM server, through its own copy under `servers/mm/`. The
+  consequence the audit flagged: the kernel's own `MUZIX_SVC_*` handlers in
+  `kernel/system_service.c` have **no caller in the image** — the only callers
+  of `muzix_system_task_handle_message()` are the two dispatchers the kernel
+  does not link — so they are dead code there, kept because the host tests
+  drive them directly and because deleting the dispatcher would delete the
+  shape the servers are modelled on. Switching the kernel link was considered
+  and rejected: it would put an unexercised dispatcher between `exec_loader`,
+  `rom_read` and every syscall-layer copy on one side and the platform
+  primitives on the other, on a kernel stack with about 1.2 KiB of headroom,
+  on the path that boots the machine. If a kernel caller ever needs one of
+  the refused methods, implement it in `kernel/mm_service.c` as a direct call
+  into `platform/zeta-v2/context_switch.c`.
+- **P-2 — the tick handler is reachable through two vector paths, and only one
+  of them is exercised.** `platform/zeta-v2/tick.s` plants a three-byte `JP`
+  to `_muzix_tick_isr` at `0x0038` (IM1) *and* an IM2 table at `0x0080` whose
+  `0x82` entry is the tick and whose `0x84` entry is the UART's receive
+  interrupt; the machine runs IM2, so the IM1 vector is a floor under the mode
+  the ROM boot stub leaves behind — a tick that arrives before `im 2` is armed
+  lands on the same handler rather than on whatever byte happens to sit at
+  `0x38`. Its safety argument (window-0 code and cells, no tail call, no bank
+  write, pushes only on the kernel stack or on the interrupted process's own)
+  has to hold for both paths, and the emulator's CTC model exercises only the
+  IM2 one: nothing in the test harness fires a tick in IM1 mode. The table
+  itself is pure data at `0x0080–0x008F`, clear of `_CODE` (which starts at
+  `0x0098`) by argument, not by a gate.
+- **`syscall_vector.c` is dead in the image.** The module is linked
+  (`KERNEL_C_MODULES`) and its host test (`test_syscall_vector.c`) passes, but
+  `muzix_z80_install_syscall_vector()` has no production caller:
+  `platform/zeta-v2/kernel_entry.s` plants the `JP` at `0x0030` itself, in
+  three stores, and that is the installed path. Kept as the documented API and
+  for the test; nothing in the ROM calls it.
+- **The UNA dispatch path is unverified — there is no UNA hardware.**
+  `platform/zeta-v2/una_boot.s` / `una_stage2.s` behind
+  `tools/make_una_image.sh` / `tools/test_una_image.sh` are hand-run scripts
+  with no make target. Stage-2 is a deliberately small freestanding payload
+  that proves the reset-to-stage-2 handoff (it prints a banner and stops)
+  while the C kernel is not freestanding for UNA: no UNA block device, no
+  filesystem through it. The scripts' output has never been checked against a
+  board.
+- **The FS server's UART transmit bound is self-referential — a design
+  limitation.** In the FS server's link, `_muzix_zeta_uart_send()`'s four-tick
+  wait for a free transmitter is measured on `muzix_tick_count`, which
+  resolves to `servers/fs/fs_clock.c`'s counter — advanced once per dispatched
+  request at the top of `fs_server_handle()`. A transmit wait taken *inside* a
+  handler therefore cannot expire on its own: the counter can only move on the
+  next request, which cannot arrive while the server is blocked in the send.
+  The real transmitter drains by itself, so in practice the bound holds; on a
+  line that never reports THR-empty the FS server would deadlock inside its
+  own send, where the kernel's identical wait is bounded by the real 120 Hz
+  tick. Accepted, per `fs_clock.h`: that counter measures request progress,
+  not wall time, and the waits that must be bounded in real time are bounded
+  by libc's `read()` parking on the kernel's deadline.
 
 ### Boot Failure Investigation Notes
 
@@ -855,30 +1148,51 @@ is citing the test double.
 ## Key File References
 
 ### Kernel Core
-- `kernel/kernel_main.c` — Entry point: init UART, mount ROMFS, init services, exec shell
+- `kernel/kernel_main.c` — Entry point: init UART, init IPC, init MM service, init services, exec servers + shell
 - `kernel/kernel_loop.c` / `kernel_loop.h` — Scheduler dispatch loop
-- `kernel/proc_table.c` / `proc_table.h` — Process table (max 4 procs), the
+- `kernel/proc_table.c` / `proc_table.h` — Process table (max 8 procs), the
   ready queues and the round-robin pick, park and the two wakes
 - `kernel/load.c` / `load.h` — the three Q14 busy-fraction windows behind
   `SYS_LOAD`
 - `kernel/syscalls.c` / `syscalls.h` — Syscall dispatch (kernel + user)
-- `kernel/system_task.c` — System task (IPC message handling)
-- `kernel/exec_loader.c` / `exec_loader.h` — Muzix executable-header validation,
-  linker-derived entry handling, and flat-image loading
+- `kernel/syscalls_ipc.c` — IPC-based syscall dispatch (FS/MM/PM → userspace servers)
+- `kernel/ipc.c` (header `include/muzix_ipc.h` — there is no `kernel/ipc.h`) — Minix-style IPC core (send/receive/both, priority queues)
+- `kernel/exec_loader.c` / `exec_loader.h` — Muzix executable-header validation, linker-derived entry handling, and flat-image loading (dual path: direct ROM reads before FS server, IPC after)
 - `kernel/bootstrap.c` / `startup.c` — Boot initialization
 - `kernel/shell.c` — In-kernel shell (TTY-based, fallback if exec fails)
 - `kernel/rom_read.c` — ROM block device read (write-only bank-safe)
 - `kernel/libc_str.c` — Kernel string utilities
+- `kernel/msg_pool.c` / `kernel/proc_server.c` — source-only orphans: neither
+  is in `KERNEL_C_MODULES`, so nothing links them. They call
+  `muzix_proc_table_park()` on arbitrary slots, which `tools/check_park_site.rb`
+  exists to refuse (`muzix_current_slot(ctx)` is the only sanctioned capture),
+  so do not mistake them for kernel code
 
-### Memory Manager
-- `mm/mm_service.c` / `mm_service.h` — Memory management service
-- `mm/mm_copy.c` / `mm_copy.h` — Copy service: map-to-map transfer, the
-  kernel→user/user→kernel entry points, and the message handlers behind
-  `muzix_mm_copy_*`. Sole owner of the platform copy primitives
+### Memory Manager (Userspace Server at slot 3)
+- `servers/mm/mm_server.c` — Userspace MM server main loop and IPC handlers
+- `kernel/mm_service.c` — the **kernel-linked** MM service module. Three files
+  in the tree share the stem `mm_service`; the Makefile's `KERNEL_C_MODULES`
+  lists the bare stem and vpath puts `kernel/` ahead of `mm/` and `servers/mm/`,
+  so this file is the kernel's implementation. It implements the page
+  allocator and the three copy entry points (`muzix_mm_copy_rom_page_to_kernel`
+  for `rom_read_block`, `muzix_mm_copy_kernel_to_user` /
+  `muzix_mm_copy_user_to_kernel` for `muzix_copy_*_current` and the syscall
+  layer's copies) as direct calls into the platform's `zeta_copy_*` primitives,
+  and refuses the message-routed entry points (`newmap`, `copy`, `load_map`,
+  `load_kernel_map`, `cross_bank_call`, `copy_page_to_kernel`,
+  `refresh_visible`) that no kernel caller needs. Its header records why the
+  link is not switched to the dispatcher
+- `mm/mm_service.c` / `mm_service.h` — the message-routed dispatcher (every
+  method builds a `muzix_system_message_t` and calls
+  `muzix_system_task_handle_message()`). **Not in the kernel image** — the
+  userspace MM server links its own copy under `servers/mm/` per
+  `MM_SERVER_C_MODULES`. Editing it does not change the kernel
+- `mm/mm_copy.c` / `mm_copy.h` — Copy service: map-to-map transfer, the kernel→user/user→kernel entry points
 - `mm/mproc_model.c` / `mproc_model.h` — Process memory model with `umap()`
 
-### Filesystem
-- `fs/fs_service.c` — Main FS service: open/read/write/seek/close
+### Filesystem (Userspace Server at slot 2)
+- `servers/fs/fs_server.c` — Userspace FS server main loop and IPC handlers
+- `fs/fs_service.c` — **Userspace** FS service logic (open/read/write/seek/close, etc.)
 - `fs/volume.c` / `volume.h` — Volume mount/format/flush lifecycle
 - `fs/block_device.c` / `block_device.h` — Block device abstraction
 - `fs/block_cache.c` / `block_cache.h` — LRU block cache
@@ -889,13 +1203,24 @@ is citing the test double.
 - `fs/path.c` — Path resolution
 - `fs/superblock.c` — Superblock load/validate
 - `fs/tty_device.c` — TTY abstraction (canonical mode, echo, XON/XOFF)
-- `fs/rom_block_device.c` — ROM block device
+- `servers/fs/fs_clock.c` / `fs_clock.h` — the clock the FS server's TTY console
+  uses for its progress counter (in `FS_SERVER_MODULES`; there is no
+  `fs/rom_block_device.c` — ROM block reads are `kernel/rom_read.c`)
+
+### Process Manager (Userspace Server at slot 4)
+- `servers/pm/pm_server.c` — Userspace PM server main loop and IPC handlers
+- `pm/pm_service.c` — **Userspace** PM service logic (fork/exec/exit/wait, signals, RTC, uid/gid)
+- `kernel/proc_table.c` — **Shared** process table (max 8 procs), ready queues, round-robin pick, park and wakes
 
 ### Platform (Zeta V2)
 - `platform/zeta-v2/bank_io.h` / `bank_io.s` — Bank switching I/O (ports $78–$7C)
 - `platform/zeta-v2/kernel_bank_model.c` — Kernel bank mapping model
 - `platform/zeta-v2/kernel_entry.s` — Kernel entry at 0x0098; `_halt` is reached
-  only if `_kernel_main` returns
+  only if `_kernel_main` returns. `_muzix_zeta_enter_userspace` refuses a map
+  whose `pages[3]` is not the kernel's `0x23` before it writes a single bank
+  register (the same window-3 rule `context_switch.c` enforces on the copy
+  paths), and `_muzix_zeta_resume_from` hands a resumed process its pending
+  syscall's return value in DE, exactly as the trap's ordinary exit does
 - `platform/zeta-v2/rom_boot.s` — ROM boot stub (LDIR + JP 0x0098)
 - `platform/zeta-v2/syscall_entry.c` / `syscall_entry.s` — Userspace syscall trap
 - `platform/zeta-v2/syscall_entry_stub.c` — Syscall stub
@@ -914,8 +1239,9 @@ is citing the test double.
   come from
 - `platform/zeta-v2/trace.c` / `trace.h` — the ring buffer the fallback
   shell's `trace` command dumps
-- `platform/zeta-v2/sdz80_runtime.s` — `___sdcc_call_hl` / `___sdcc_call_iy`
-  and nothing else, which is why `__mullong` does not resolve from it
+- `platform/zeta-v2/sdz80_runtime.s` — `___sdcc_call_hl`, `___sdcc_call_iy` and
+  (the `--stack-auto` frame entry) `___sdcc_enter_ix`, and no multiply helper,
+  which is why `__mullong` does not resolve from it
 - `platform/zeta-v2/una_boot.s`, `una_stage2.s` — the UNA BIOS stage-1/stage-2
   sources behind `tools/make_una_image.sh`; no make target builds them
 - `platform/zeta-v2/tick.s` / `tick.h` — the 120 Hz CTC tick **and the UART's
@@ -934,8 +1260,10 @@ is citing the test double.
   0x0080 is safe under every map because **window 0 is always kernel** —
   `mm/mproc_model.c` builds a process map as `{0x20, stack, text, 0x23}` and
   only windows 1 and 2 are ever replaced — which is the same fact
-  `tools/check_window0.rb` enforces and the reason the handler at 0x0138 has
-  always been safe. The divisor arithmetic, the "why is this handler safe under
+  `tools/check_window0.rb` enforces and the reason the vector table and the
+  handler itself have always been safe (the handler is `_muzix_tick_isr`,
+  0x01C2 as of this writing — read `build/kernel.map`, not this file, for the
+  current address). The divisor arithmetic, the "why is this handler safe under
   any map" argument and the "why does the UART handler set a flag instead of
   waking anybody" argument are all in the source, and they are the reason the
   next person should not make it bigger.
@@ -949,12 +1277,14 @@ is citing the test double.
   so it is the one place the read interface's three answers are distinguished
 - `lib/proc_info.h` — the `struct proc_info` layout `top` reads out of
   `SYS_PROCTAB`, and the `MUZIX_PROC_TABLE_MAX` static assertion
-- `lib/syscall.c` / `syscall.h` — Syscall wrappers (42 user syscalls, numbered
-  1–60 with gaps)
+- `lib/syscall.c` / `syscall.h` — Syscall wrappers (48 user syscall numbers,
+  42 non-IPC + the 6 IPC calls, over 1–60 with gaps)
 - `lib/user_syscall.s` — Assembly syscall entry (CALL 0x0030)
 - `lib/crt0.s` — startup; loads `argc`/`argv` into HL/DE before `call _main`
 - `lib/math.s`, `lib/sdcc_runtime.s` — userspace-side helpers, linked per app
-- `lib/romfs_data.c` — ROMFS data
+- `lib/romfs_data.c` — ROMFS data blob; legacy and not linked into anything
+  (no link line references it, and the tools exclude it as generated data) —
+  kept for reference, not a build component
 
 ### Apps & Shell
 - `shell/shell.c` — Userspace shell, and PID 1: the kernel execs it into slot 1
@@ -997,9 +1327,10 @@ caller cannot slip past review.
 |---|---|
 | `tools/check_kernel_layout.rb` | `_CODE`/`_DATA` overlap, `_DATA` below the end of `_CODE`, headroom under 1024 bytes, a populated `_HOME`, a `.lib` in `KERNEL_LINK_ORDER` |
 | `tools/kernel_data_base.rb` | not a gate — prints the `-b _DATA` the link must use |
-| `tools/check_window0.rb` | the tick module or its symbols moving out of window 0 |
+| `tools/check_window0.rb` | the tick module or its symbols moving out of window 0 — and, since the 2026-10-14 audit round, the pinned set is `kernel_entry`, `syscall_entry`, `tick`, `zeta_bank_io` and `zeta_uart`, plus the window-0 handoff symbols and every module the source scan finds writing a bank port |
 | `tools/check_memory_manager.rb` | a new caller of the platform copy primitives outside `mm/` |
 | `tools/check_park_site.rb` | a `park()` call site that does not park `muzix_current_slot(ctx)` |
+| `tools/check_proc_identity.rb` | the `10 +`/`NR_TASKS +` array offset added to a process number, a direct variable index into `procs[]`, a local re-definition of a server number, or a new caller of the deprecated `muzix_ipc_get_proc()` |
 | `tools/check_z80_call_convention.rb` | a compiled probe disagreeing with the measured return register |
 | `tools/check_syscall_context.rb` | a syscall-context field read but never assigned, and the second failure mode it names |
 | `tools/check_user_pointers.rb` | a user address used without crossing a copy-in boundary — Muzix's answer to MINIX's `p_splimit` |

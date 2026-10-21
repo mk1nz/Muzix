@@ -4,6 +4,7 @@
 .globl _muzix_zeta_staged_src
 .globl _muzix_zeta_staged_dst
 .globl _muzix_zeta_staged_len
+.globl _muzix_zeta_ldir_copy
 .globl _muzix_zeta_caller_in_window0
 
 ; Bank state has to survive a bank switch, so it cannot live in _CODE: the
@@ -83,6 +84,32 @@ _muzix_zeta_staged_dst:
     .dw #0
 _muzix_zeta_staged_len:
     .dw #0
+
+; void muzix_zeta_ldir_copy(uint8_t *dst, const uint8_t *src, uint16_t len)
+;
+; The general form of the staged copy: ldir from src to dst, len bytes, taking
+; the operands in registers.  The staged version above exists because a direct
+; asm callee cannot be relied on to RECEIVE its arguments - SDCC's peephole for
+; a call to an assembly function is not one this tree can lean on - so the
+; staged version takes them from three word cells in _DATA instead.
+;
+; This one takes the same cells, but for the caller that copies a chunk of a
+; process image at boot.  The boot copy in kernel/rom_read.c did a byte loop
+; with size_t indexing, which on this target is fifteen instructions per byte -
+; every one of them an ix-relative fetch of the loop counter - and the shell
+; prompt took 13.5 million instructions to reach, of which the exec phase alone
+; was 5.4 million for about 54 KiB of images.  ldir is 21 cycles of setup plus
+; 21 cycles per 256 bytes, so the same copy is roughly a fiftieth of the work.
+;
+; The byte loop's cost was not merely aesthetic: at the measured rate the boot
+; was 37 seconds on a 4 MHz part, almost all of it before the first character
+; of the banner.
+_muzix_zeta_ldir_copy:
+    ld      hl, (_muzix_zeta_staged_src)
+    ld      de, (_muzix_zeta_staged_dst)
+    ld      bc, (_muzix_zeta_staged_len)
+    ldir
+    ret
 
 ; _user_banks and _saved_banks were the four-byte shadows the removed bank
 ; entry points LDIRed between.  Nothing reads either of them now, so they are

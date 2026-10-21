@@ -10,7 +10,42 @@
 
 #include "../lib/libc.h"
 #include "../lib/syscall.h"
+#include "../include/muzix_ipc.h"
 #include "muzix_build_stamp.h"
+
+/* The FS server's PROCESS NUMBER, from include/muzix_ipc.h - the one place the
+ * spelling exists.
+ *
+ * This used to be a locally-invented 11, on the theory that an IPC slot is
+ * `10 + server_id`.  That 10 is an ARRAY OFFSET inside procs[], not part of the
+ * identity.  Passed as a destination it selected procs[21], a slot nobody
+ * registered, and every call in this file was answered with EFAULT.
+ *
+ * Do NOT reintroduce a local number, and do NOT recompute one from an id or a
+ * slot.  If a new server is needed, add a MUZIX_PROC_* to the header. */
+#define FS_SERVER_IPC_SLOT MUZIX_PROC_FS
+
+/* IPC-based FS operations */
+static int ipc_chdir(const char *path)
+{
+    return sys_chdir(path);
+}
+
+/* Returns what sys_getcwd returns - a pointer to the buffer, or NULL on
+ * failure.  This used to be `int`, and libc's sys_getcwd() returns char *
+ * (lib/syscall.h), so every return smuggled a pointer through an int and
+ * refresh_cwd()'s `< 0` test was reading a pointer as a status. */
+static char *ipc_getcwd(char *buf, int size)
+{
+    /* Same raw-sendrec defect the old read path had: the non-parking else
+     * returned the request's own m1_i1 (0) and the reply was copied later into
+     * the dead frame's &msg, so the prompt's cwd never arrived and the stale
+     * copy could land on a live stack frame.  sys_getcwd() is the routed
+     * SYS_GETCWD: it parks the caller exactly like sys_read()/sys_write() and
+     * the FS's handle_getcwd() copies the string through the same
+     * deliver_parked path. */
+    return sys_getcwd(buf, size);
+}
 
 /* Which tree this binary was built from, written by the Makefile.  The fallback
  * is for compiling shell.c outside make, which the host tests do. */
@@ -42,7 +77,7 @@ static int cmd_help(int argc, char *argv[]);
 
 static void refresh_cwd(void)
 {
-    if (!getcwd(cwd, sizeof(cwd))) {
+    if (ipc_getcwd(cwd, sizeof(cwd)) == 0) {
         strcpy(cwd, "/");
     }
 }
@@ -65,12 +100,12 @@ static struct builtin builtins[] = {
 static int cmd_cd(int argc, char *argv[])
 {
     if (argc < 2) {
-        if (chdir("/") != 0) {
+        if (ipc_chdir("/") != 0) {
             puts("cd: cannot change to root");
             return 1;
         }
     } else {
-        if (chdir(argv[1]) == 0) {
+        if (ipc_chdir(argv[1]) == 0) {
             refresh_cwd();
         } else {
             puts("cd: cannot change to directory: ");
@@ -123,7 +158,16 @@ static int cmd_help(int argc, char *argv[])
     printf("  echo [args]  - Print arguments\n");
     printf("  help         - Show this help\n");
     printf("  exit [code]  - Exit shell\n\n");
-    printf("External commands are executed using fork/exec\n");
+    printf("External commands are executed using fork/exec:\n");
+    printf("  ls [dir]    - List directory\n");
+    printf("  cat file    - Print file contents\n");
+    printf("  echo args   - Print arguments\n");
+    printf("  date        - Show or set RTC date/time\n");
+    printf("  top         - Process monitor\n");
+    printf("  uptime      - Show system uptime\n");
+    printf("  loadavg     - Show 1/5/15-minute load averages\n");
+    printf("  hwdiag      - Hardware diagnostics\n");
+    printf("  z80test     - Z80 CPU instruction tests\n");
     return 0;
 }
 
@@ -171,14 +215,33 @@ static int execute_external(int argc, char *argv[])
 {
     int pid;
     int status = 0;
-    
+    char pathbuf[64];
+    const char *path_prefixes[] = { "/bin/", "/sbin/", NULL };
+    int i;
+
     (void)argc;  /* Suppress unused warning */
-    
+
     pid = fork();
-    
+
     if (pid == 0) {
-        /* Child process: execute command */
+        /* Child process: first try the command as-given, then PATH search */
         exec(argv[0], (const char * const *)argv);
+
+        /* If exec fails, try PATH search */
+        for (i = 0; path_prefixes[i] != NULL; i++) {
+            /* Build path = prefix + argv[0] */
+            char *p = pathbuf;
+            const char *prefix = path_prefixes[i];
+            while (*prefix && (p - pathbuf) < (int)sizeof(pathbuf) - 1) {
+                *p++ = *prefix++;
+            }
+            const char *cmd = argv[0];
+            while (*cmd && (p - pathbuf) < (int)sizeof(pathbuf) - 1) {
+                *p++ = *cmd++;
+            }
+            *p = '\0';
+            exec(pathbuf, (const char * const *)argv);
+        }
         /* If exec fails, exit with error */
         puts("shell: cannot execute: ");
         puts(argv[0]);
@@ -222,26 +285,25 @@ static int readline(char *buf, int size)
 
     while (i < size - 1) {
         char byte;
+        int got;
 
-        /* read(), not sys_read(): this is the process that has to wait, and
-         * waiting means parking - taking this process out of the runnable set
-         * so something else can run, and coming back when there is input.
+        /* libc's read(), which parks on MUZIX_READ_AGAIN (-11) for 240 ticks
+         * and returns every other answer, exactly as it does for getchar() -
+         * the same path, one implementation of the park policy, rather than
+         * this loop keeping a second copy of it in step.  That is the whole
+         * change: the do/while below used to catch MUZIX_READ_AGAIN itself and
+         * call sys_park(240), which is two places deciding when a console
+         * reader waits and two places that have to agree about it.
          *
-         * The spin this replaces was `sys_read` in a loop, because a read that
-         * found nothing used to answer -1 and -1 means "no character", so the
-         * only thing left to do with it was ask again, immediately, for as long
-         * as the user declined to type.  That is the whole of the CPU
-         * saturation: the prompt was idle and the processor was not, and the
-         * load figure reporting 1.00 was the only honest thing it could say.
-         *
-         * read() parks instead, and returns when the device has something. */
-        int32_t got = read(0, &byte, 1);
-
-        /* read() only returns when it has an answer that is not "nothing yet".
-         * A zero-length read is still Ctrl-D and still ends the line.  A
-         * negative answer is now a real error rather than a slow console - a
-         * bad descriptor, say - and retrying it for ever would be the same spin
-         * with a worse excuse, so it ends the line too. */
+         * The three-way contract is unchanged and lands in the same test.
+         * read() hands back a byte, or a zero, or a negative status, and only
+         * "nothing yet" is absorbed inside it: a zero-length read is still
+         * Ctrl-D and still ends the line; a negative answer is still a real
+         * error - a bad descriptor, say - and retrying it for ever would be
+         * the same spin with a worse excuse, so it ends the line too.  What
+         * read() itself now guarantees is that -11 never reaches here, so the
+         * old loop could not see it either and its removal costs nothing. */
+        got = read(0, &byte, 1);
         if (got <= 0) {
             break;
         }
@@ -285,6 +347,10 @@ static void shell_loop(void)
         /* Print prompt */
         refresh_cwd();
         printf("%s> ", cwd);
+        /* The prompt has no newline, so it sits in libc's line buffer until
+         * something else flushes it - and the next thing is the read() that
+         * waits for a character.  Flush it here or the user sees nothing. */
+        muzix_stdout_flush_now();
         
         /* Read command line */
         if (readline(command_buf, MAX_COMMAND) <= 0) {

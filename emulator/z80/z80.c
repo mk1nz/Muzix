@@ -373,13 +373,7 @@ static inline void lor(z80* const z, const uint8_t val) {
 
 // compares a value with register A
 static inline void cp(z80* const z, const uint8_t val) {
-  subb(z, z->a, val, 0);
-
-  // the only difference between cp and sub is that
-  // the xf/yf are taken from the value to be substracted,
-  // not the result
-  z->yf = GET_BIT(5, val);
-  z->xf = GET_BIT(3, val);
+    subb(z, z->a, val, 0);
 }
 
 // 0xCB opcodes
@@ -537,9 +531,8 @@ static inline void ldi(z80* const z) {
 
 static inline void ldd(z80* const z) {
   ldi(z);
-  // same as ldi but HL and DE are decremented instead of incremented
-  set_hl(z, get_hl(z) - 1);
-  set_de(z, get_de(z) - 1);
+  set_hl(z, get_hl(z) - 2);
+  set_de(z, get_de(z) - 2);
 }
 
 static inline void cpi(z80* const z) {
@@ -568,6 +561,8 @@ static void in_r_c(z80* const z, uint8_t* r) {
   z->pf = parity(*r);
   z->nf = 0;
   z->hf = 0;
+  z->xf = GET_BIT(3, *r);
+  z->yf = GET_BIT(5, *r);
 }
 
 static void ini(z80* const z) {
@@ -1609,19 +1604,20 @@ void exec_opcode_ed(z80* const z, uint8_t opcode) {
     }
   } break; // cpdr
 
-  case 0x40: in_r_c(z, &z->b); break; // in b, (c)
-  case 0x48: in_r_c(z, &z->c); break; // in c, (c)
-  case 0x50: in_r_c(z, &z->d); break; // in d, (c)
-  case 0x58: in_r_c(z, &z->e); break; // in e, (c)
-  case 0x60: in_r_c(z, &z->h); break; // in h, (c)
-  case 0x68: in_r_c(z, &z->l); break; // in l, (c)
+  case 0x40: z->mem_ptr = get_bc(z) + 1; in_r_c(z, &z->b); break; // in b, (c)
+  case 0x48: z->mem_ptr = get_bc(z) + 1; in_r_c(z, &z->c); break; // in c, (c)
+  case 0x50: z->mem_ptr = get_bc(z) + 1; in_r_c(z, &z->d); break; // in d, (c)
+  case 0x58: z->mem_ptr = get_bc(z) + 1; in_r_c(z, &z->e); break; // in e, (c)
+  case 0x60: z->mem_ptr = get_bc(z) + 1; in_r_c(z, &z->h); break; // in h, (c)
+  case 0x68: z->mem_ptr = get_bc(z) + 1; in_r_c(z, &z->l); break; // in l, (c)
   case 0x70: {
     uint8_t val;
-    in_r_c(z, &val);
-  } break; // in (c)
-  case 0x78:
-    in_r_c(z, &z->a);
     z->mem_ptr = get_bc(z) + 1;
+    in_r_c(z, &val);
+  } break; // in (c) / in f, (c)
+  case 0x78:
+    z->mem_ptr = get_bc(z) + 1;
+    in_r_c(z, &z->a);
     break; // in a, (c)
 
   case 0xA2: ini(z); break; // ini
@@ -1641,13 +1637,13 @@ void exec_opcode_ed(z80* const z, uint8_t opcode) {
     }
     break; // indr
 
-  case 0x41: z->port_out(z, z->c, z->b); break; // out (c), b
-  case 0x49: z->port_out(z, z->c, z->c); break; // out (c), c
-  case 0x51: z->port_out(z, z->c, z->d); break; // out (c), d
-  case 0x59: z->port_out(z, z->c, z->e); break; // out (c), e
-  case 0x61: z->port_out(z, z->c, z->h); break; // out (c), h
-  case 0x69: z->port_out(z, z->c, z->l); break; // out (c), l
-  case 0x71: z->port_out(z, z->c, 0); break; // out (c), 0
+  case 0x41: z->port_out(z, z->c, z->b); z->mem_ptr = get_bc(z) + 1; break; // out (c), b
+  case 0x49: z->port_out(z, z->c, z->c); z->mem_ptr = get_bc(z) + 1; break; // out (c), c
+  case 0x51: z->port_out(z, z->c, z->d); z->mem_ptr = get_bc(z) + 1; break; // out (c), d
+  case 0x59: z->port_out(z, z->c, z->e); z->mem_ptr = get_bc(z) + 1; break; // out (c), e
+  case 0x61: z->port_out(z, z->c, z->h); z->mem_ptr = get_bc(z) + 1; break; // out (c), h
+  case 0x69: z->port_out(z, z->c, z->l); z->mem_ptr = get_bc(z) + 1; break; // out (c), l
+  case 0x71: z->port_out(z, z->c, 0); z->mem_ptr = get_bc(z) + 1; break; // out (c), 0
   case 0x79:
     z->port_out(z, z->c, z->a);
     z->mem_ptr = get_bc(z) + 1;
@@ -1705,7 +1701,8 @@ void exec_opcode_ed(z80* const z, uint8_t opcode) {
   case 0x96:
   case 0x97: {
     uint8_t val = rb(z, get_hl(z));
-    val = (val << 1) | 1;
+    z->cf = val >> 7;
+    val = (uint8_t)((val << 1) | 1);
     wb(z, get_hl(z), val);
     z->sf = val >> 7;
     z->zf = val == 0;
@@ -1714,7 +1711,6 @@ void exec_opcode_ed(z80* const z, uint8_t opcode) {
     z->hf = 0;
     z->xf = GET_BIT(3, val);
     z->yf = GET_BIT(5, val);
-    z->cf = val & 1;
   } break; // sll (hl) - undocumented
 
   // ED 98-9F: SRL (HL) - shift right logical
@@ -1843,14 +1839,18 @@ void exec_opcode_ed(z80* const z, uint8_t opcode) {
     z->mem_ptr = get_hl(z) + 1;
   } break; // rld
 
-  case 0x0D:
-  case 0xDD:
-  case 0xFD:
-    /* Undocumented NOPs used by SDCC for alignment. */
-    z->mem_ptr = get_hl(z);
-    break;
+   case 0x0D:
+   case 0xDD:
+   case 0xFD:
+   case 0x4E:
+   case 0x6E:
+   case 0x77:
+   case 0x7F:
+     /* Undocumented NOPs used by SDCC for alignment. */
+     z->mem_ptr = get_hl(z);
+     break;
 
-  default:
+   default:
     // Report where: an unknown opcode is always a symptom of an earlier
     // mis-decode or a wild jump, and the address is what identifies which.
     fprintf(stderr, "unknown ED opcode: %02X at PC=%04X\n", opcode, z->pc);

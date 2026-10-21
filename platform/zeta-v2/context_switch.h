@@ -52,10 +52,13 @@ void zeta_kernel_enter(zeta_state_t *state,
 
 /* Exit kernel mode: restore user context.
  * Must be called with interrupts disabled. */
-void zeta_enter_process(zeta_state_t *state,
-                        const process_map_t *target_map);
 void zeta_kernel_exit(zeta_state_t *state,
                       const zeta_saved_context_t *saved_user_context);
+
+/* Jump to the entry point stored in _g_enter_entry_asm_local.
+ * Must be called from window 0 after load_map() has installed the user map.
+ * Never returns. */
+void muzix_zeta_jump_to_entry(void);
 
 /* Get the fixed kernel process map (pages 0x20, 0x21, 0x22, 0x23) */
 

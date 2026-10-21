@@ -339,6 +339,7 @@ struct z80pack_t {
     /* Configuration */
     z80pack_system_t system;               /* Current system */
     bool verbose;                          /* Verbose output */
+    bool kernel_trace;                     /* Kernel trace flag request (-k) */
     
     /* Statistics */
     uint64_t total_cycles;
@@ -490,6 +491,7 @@ void z80pack_set_watchw(z80pack_t* pack, uint16_t addr);
 void z80pack_set_trace(z80pack_t* pack, int n);
 void z80pack_dump_trace(z80pack_t* pack);
 void z80pack_set_verbose(z80pack_t* pack, bool enable);
+void z80pack_set_kernel_trace(z80pack_t* pack, bool enable);
 
 /**
  * Print emulator status

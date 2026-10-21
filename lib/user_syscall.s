@@ -26,8 +26,15 @@
 ;
 ;   syscall number in A (low byte)
 ;   three 32-bit arguments as six words at SP+2 .. SP+13
-;   result in HL
+;   result in DE
 ;   every other register clobbered, SP restored to its value at the call
+;
+; DE, not HL, and both exits agree on it: the ordinary return leaves the
+; dispatch result in DE, and a process resumed from a park is handed
+; _muzix_resume_ret in DE by zeta_resume_process before it jumps back into
+; this stub.  The trap's own header block spells the same ABI out, and
+; tools/check_z80_call_convention.rb measures the return register from a
+; compiled probe on every `make rom`.
 ;
 ; The trap cannot preserve the caller's registers, so this stub does not try.
 ; The arguments the kernel needs are on the process stack, which is in window 1,
@@ -84,8 +91,9 @@ __syscall:
 
     call    0x0030
 
-    ; A 32-bit return leaves the low word in DE and the high word in HL.  The
-    ; 16-bit result arrives in HL, so move it down and sign extend.
+    ; A 32-bit return leaves the low word in DE and the high word in HL, so
+    ; the 16-bit syscall result arrives in DE and is stored as the low word
+    ; before the sign extension below.
     ;
     ; This was briefly written the other way round - result in HL, extension in
     ; DE - on the theory that the two plausible readings of a 32-bit return

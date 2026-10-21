@@ -51,6 +51,22 @@ void muzix_load_reset(void);
 /* Fold the interval that has just ended into the three windows. */
 void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks);
 
+/* (a * b) >> 14 in Q14, out of four byte-sized partial products, with no
+ * 16x16 multiply and no 32-bit arithmetic anywhere.
+ *
+ * It is exported rather than static for one reason: the arithmetic is the part
+ * of this module most easily got wrong and least reachable from a test, and
+ * AGENTS.md has claimed since it was written that kernel/test_load.c checks
+ * it against the host compiler.  It could not, while the routine was file
+ * static - the claim was a description of an intention, not of a test.  The
+ * routine is now callable from the host test and is checked there over the
+ * dense operand grid and a deterministic random sweep.
+ *
+ * Exact for a, b <= 16384 (Q14 operands), where (a*b) >> 14 <= 16384.  Above
+ * that the true value needs 18 bits and the uint16_t return keeps its low 16 -
+ * see the derivation in load.c. */
+uint16_t muzix_load_mul(uint16_t a, uint16_t b);
+
 /* Record `counts` of time the processor has just spent stopped in HALT, since
  * the last sample.
  *

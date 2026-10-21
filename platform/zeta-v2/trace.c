@@ -54,6 +54,9 @@ static void uart_hex32(uint32_t v)
 
 void muzix_trace_putc(uint8_t c)
 {
+    if (!MUZIX_TRACE_ENABLED) {
+        return;
+    }
     g_trace_ring[g_trace_head] = c;
     g_trace_head = (uint16_t)((g_trace_head + 1u) % MUZIX_TRACE_RING_SIZE);
     /* 32 bits, and it deliberately does not saturate.  A counter that sticks

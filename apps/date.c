@@ -26,8 +26,10 @@ static const char *const WEEKDAYS[7] = {
  * through to the default arm and prints a question mark for the character
  * after the percent, so "%02d" comes out as "?2d".  And the tens are found by
  * subtraction rather than division, because the division helper a `/` compiles
- * to is not linked into any userspace program - see print_unsigned() in
- * lib/libc.c, which is the same problem and the same fix.
+ * to - __divsint, from lib/math.s - used to return the result in HL while the
+ * compiled caller reads DE, and a division through it was a silent wrong
+ * answer.  See print_unsigned() in lib/libc.c, which is the same practice and
+ * the same reason.
  */
 static void put2(int value)
 {

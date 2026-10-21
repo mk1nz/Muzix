@@ -9,11 +9,27 @@
 #include "../mm/mm_copy.h"
 #include "../platform/zeta-v2/context_switch.h"
 
-int muzix_system_service_load_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_load_kernel_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_with_temp_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-int muzix_system_service_cross_bank_call(muzix_system_service_t *svc, const muzix_system_message_t *msg);
-void muzix_system_service_refresh_visible(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_load_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_load_kernel_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_with_temp_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_cross_bank_call(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static void muzix_system_service_refresh_visible(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_valid_slot(uint8_t slot);
+int muzix_system_service_dispatch(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_fork(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_newmap(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_exec(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_xit(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_getsp(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_times(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_abort(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_sig(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_copy(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_load_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_load_kernel_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_with_temp_map(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static int muzix_system_service_cross_bank_call(muzix_system_service_t *svc, const muzix_system_message_t *msg);
+static void muzix_system_service_refresh_visible(muzix_system_service_t *svc, const muzix_system_message_t *msg);
 static int muzix_system_service_valid_slot(uint8_t slot)
 {
     return slot < MUZIX_PROC_TABLE_MAX;
@@ -135,6 +151,13 @@ int muzix_system_service_exec(muzix_system_service_t *svc, const muzix_system_me
 {
     muzix_kernel_loop_t *loop;
 
+    /* Validate first, trace second.  The trace used to sit above the guard and
+     * dereferenced msg->proc1 and msg->stack_ptr before the !msg test that was
+     * supposed to protect them - cppcheck flagged it, and it was right: a
+     * system message that arrived without a message would have crashed the
+     * tracer instead of returning MUZIX_SYS_SERVICE_ERR.  Nothing in the
+     * kernel reaches this with msg == 0 today, which is the only reason the
+     * machine never showed it. */
     if (!svc) {
         return MUZIX_SYS_SERVICE_ERR;
     }
@@ -311,7 +334,7 @@ int muzix_system_service_copy(muzix_system_service_t *svc, const muzix_system_me
                  ? MUZIX_SYS_SERVICE_OK
                  : MUZIX_SYS_SERVICE_ERR;
 }
-
+ 
 int muzix_system_service_load_map(muzix_system_service_t *svc, const muzix_system_message_t *msg)
 {
     muzix_kernel_loop_t *loop;
@@ -351,9 +374,9 @@ int muzix_system_service_load_map(muzix_system_service_t *svc, const muzix_syste
     if (zeta_load_map(&mm->zeta, map) != 0) {
         return MUZIX_SYS_SERVICE_ERR;
     }
-    return MUZIX_SYS_SERVICE_OK;
+return MUZIX_SYS_SERVICE_OK;
 }
-
+ 
 int muzix_system_service_load_kernel_map(muzix_system_service_t *svc, const muzix_system_message_t *msg)
 {
     muzix_kernel_loop_t *loop;
@@ -389,7 +412,7 @@ int muzix_system_service_load_kernel_map(muzix_system_service_t *svc, const muzi
     }
     return MUZIX_SYS_SERVICE_OK;
 }
-
+ 
 void muzix_system_service_refresh_visible(muzix_system_service_t *svc, const muzix_system_message_t *msg)
 {
     muzix_kernel_loop_t *loop;
@@ -411,9 +434,9 @@ void muzix_system_service_refresh_visible(muzix_system_service_t *svc, const muz
      * recursed without bound. Every user copy reaches this, through
      * copy_user_to_kernel, and the recursion ran the kernel stack roughly
      * 57 KB down - well past its 1.2 KB - before wrapping. */
-    zeta_refresh_visible(&mm->zeta);
+zeta_refresh_visible(&mm->zeta);
 }
-
+ 
 int muzix_system_service_cross_bank_call(muzix_system_service_t *svc, const muzix_system_message_t *msg)
 {
     muzix_kernel_loop_t *loop;

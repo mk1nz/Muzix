@@ -159,8 +159,10 @@ static void out_flush(void)
  *
  * By repeated subtraction rather than division, for the reason print_unsigned()
  * in lib/libc.c gives: on this build `/` and `%` compile to calls to __divuint
- * and __moduint, and no module in any userspace link line provides them.  The
- * values are process IDs and accounting-tick counters. A
+ * and __moduint, which lib/math.s does provide - but they used to return the
+ * result in HL while the compiled caller reads DE, so every division done
+ * through them was a silent wrong answer.  The values are process IDs and
+ * accounting-tick counters. A
  * value too wide for its field is printed at full width and runs the column
  * over rather than being truncated, because a truncated counter is the kind of
  * wrong that reads as a real one. */
@@ -477,7 +479,7 @@ static void put_command(const struct proc_info *info)
         out('?');
         return;
     }
-    while (s[i] != '\0' && i < MUZIX_PROC_NAME_SIZE - 1) {
+    while (i < MUZIX_PROC_NAME_SIZE - 1 && s[i] != '\0') {
         out(s[i++]);
     }
 }

@@ -178,7 +178,7 @@ static void jump_to_kernel(void)
 /**
  * Main bootloader entry point
  */
-void bootloader_main(void)
+static void bootloader_main(void)
 {
     serial_init();
     

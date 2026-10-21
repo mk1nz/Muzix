@@ -4,13 +4,12 @@
 .globl _muzix_z80_syscall_entry
 .globl _muzix_zeta_uart_init
 .globl _muzix_zeta_enter_userspace
-.globl _muzix_userspace_entry
 .globl _muzix_userspace_banks
-.globl _zeta_enter_process
 .globl _g_enter_entry_asm
+.globl _g_enter_entry_asm_local
 .globl _g_zeta_state_ptr
 .globl _muzix_zeta_resume_from
-.globl _zeta_resume_jump
+.globl _zeta_resume_process
 .globl _g_resume_pc
 .globl _g_resume_sp
 .globl _g_resume_ret
@@ -19,6 +18,17 @@
 .globl _muzix_resume_ret
 .globl _muzix_resume_banks
 .globl _zeta_resume_process
+.globl _zeta_load_map
+.globl _muzix_zeta_jump_to_entry
+.globl _muzix_boot_phase_return_addr
+.globl _muzix_set_entry_point
+.globl _muzix_zeta_uart_send
+.globl _muzix_live_banks
+.globl s__DATA
+.globl l__INITIALIZED
+.globl s__INITIALIZED
+.globl s__INITIALIZER
+.globl l__INITIALIZER
 
 .area _CODE
 
@@ -30,6 +40,51 @@ _start:
     di
     ld sp,#0xfffe
 
+    ; Zero BSS (_DATA from s__DATA up to s__INITIALIZED, exclusive).
+    ;
+    ; The length is subtracted from the linker's own symbols instead of being
+    ; written down.  The constant that stood here described an older layout
+    ; (s__INITIALIZED was 0xAD52 then, and _INITIALIZER sat below the zeroed
+    ; range).  The layout has since grown: s__INITIALIZED is now 0xAD34 and
+    ; _INITIALIZER follows it at 0xAD43, so the old 0x0D52 ran 0x1E bytes
+    ; past the end of _DATA and wiped both.  Measured on this tree with the
+    ; emulator's store watch on 0xAD43 - the boot stub's page copy writes the
+    ; first byte of &g_loop there (PC=0040, value 0x11) and this loop then
+    ; stores 0x00 over it (PC=00A8) - leaving g_loop_ptr NULL, every user
+    ; copy refused, and the first server to sendrec spinning forever.
+    ld de, #s__DATA
+    ld hl, #s__INITIALIZED
+    xor a
+    sbc hl, de
+    ld b, h
+    ld c, l
+    ex de, hl
+bss_zero_loop:
+    ld a, b
+    or c
+    jr z, bss_zero_done
+    ld (hl), #0
+    inc hl
+    dec bc
+    jr bss_zero_loop
+bss_zero_done:
+
+    ; Publish the C static initialisers: SDCC emits the initial values into
+    ; _INITIALIZER and leaves the startup to copy them to _INITIALIZED - the
+    ; copy lib/crt0.s performs for every userspace program.  This kernel
+    ; never did it, and its _GSINIT area is empty in this link (l__GSINIT is
+    ; 0), so there is no generated routine to call; this is it.  Both areas
+    ; are in window 2, which the boot stub's page copy already filled from
+    ; ROM page 2 and the zero loop above deliberately spares.
+    ld de, #s__INITIALIZED
+    ld hl, #s__INITIALIZER
+    ld bc, #l__INITIALIZER
+    ld a, b
+    or c
+    jr z, init_done
+    ldir
+init_done:
+
     ; Install syscall vector: JP instruction at 0x0030 -> _muzix_z80_syscall_entry
     ld hl,#_muzix_z80_syscall_entry
     ld a,#0xc3
@@ -39,10 +94,7 @@ _start:
     ld a,h
     ld (0x0032),a
 
-    ; Initialize UART for console output
-    call _muzix_zeta_uart_init
-
-    ; Hand off to C kernel
+    ; Hand off to C kernel - UART init moved to kernel_main after IM2/EI
     call _kernel_main
 
 _halt:
@@ -62,28 +114,121 @@ _halt:
 ; the return address out of window 3, which is now the process's page.
 ;
 ; There are deliberately no `out (0x79..0x7b)` instructions here. The bank
-; registers are written by the memory manager, zeta_enter_process(); all this
-; does is hand over the entry point and jump.
+; registers are written by the memory manager; all this does is hand over the
+; entry point and jump.
 _muzix_zeta_enter_userspace:
-    ; Stash the entry point in a window-0 cell: _muzix_userspace_entry lives in
-    ; _DATA (window 3), which stops being readable for the kernel the moment the
-    ; map changes, but this cell does not.
-    ld hl,(_muzix_userspace_entry)
-    ld (_g_enter_entry_asm),hl
+    ; Stash the entry point in a window-0 cell: _g_enter_entry_asm lives in
+    ; window 0 (kernel page) which stays mapped.
+    ld hl,(_g_enter_entry_asm)
+    ld (_g_enter_entry_asm_local),hl
 
-    ; sdcccall(1) with a void return: param1 in HL, param2 in DE, so
-    ; zeta_enter_process(state, target_map) needs HL = the zeta state and
-    ; DE = the process map. These were the wrong way round: the callee read a
-    ; 16-bit fragment of the bank bytes as `state` and the state pointer as
-    ; `target_map`. Both non-NULL checks passed, so it installed a map read
-    ; from whatever followed &g_mm.zeta in memory - the boot stub then ran
-    ; again and the machine rebooted instead of entering userspace.
+    ; Load zeta state and process map
     ld hl,(_g_zeta_state_ptr)
     ld de,#_muzix_userspace_banks
 
-    call _zeta_enter_process        ; never returns
+    ; NULL checks for state and target_map
+    ld a,h
+    or l
+    jr z, _enter_userspace_refused
+    ld a,d
+    or e
+    jr z, _enter_userspace_refused
 
-    ; Unreachable: zeta_enter_process either jumps to the process or spins.
+    ; Load the process map (inline, no CALL because map change invalidates stack)
+    ; HL = state, DE = target_map (process_map_t* with 4 pages)
+    ;
+    ; No push/pop at all.  Every machine push or pop after the bank 3 OUT would
+    ; read or write a window that no longer belongs to the kernel, so the four
+    ; pages are gathered into registers and written out immediately.  The state
+    ; pointer is not needed on this path: the process map arrived in DE and the
+    ; map is written straight from it.
+    ;
+    ; Use HL for memory access since Z80 only supports LD r, (HL)
+    ex de, hl                   ; HL = target_map pointer
+    inc hl                      ; skip pages[0] (bank 0 is always 0x20)
+    ld b, (hl)                  ; pages[1]
+    inc hl
+    ld c, (hl)                  ; pages[2]
+    inc hl
+    ld d, (hl)                  ; pages[3]
+
+    ; Window 3 is the kernel's own window, in the kernel map and in every
+    ; process map: muzix_mproc_to_zeta_map() (mm/mproc_model.c) starts from
+    ; {0x20,0x21,0x22,0x23} and replaces only windows 1 and 2, so pages[3] is
+    ; 0x23 for anything that came through the MM and 0x20 is pinned into bank 0
+    ; unconditionally below.  A map that does not carry 0x23 in pages[3] is a
+    ; map that would hand window 3 - the kernel stack, the C frame of whoever
+    ; called this, and every _DATA static - to a process page, and the jump at
+    ; the bottom of this routine never returns to report it.  The copy paths
+    ; already refuse a region-3 target for the same reason (ZETA_TRACE_WINDOW3
+    ; in context_switch.c, reached from map_call_impl and from all three
+    ; zeta_copy_* entry points); this is the handoff path refusing the same
+    ; map on its way in.  Latent, not live: every publisher of
+    ; _muzix_userspace_banks copies a slot map built by muzix_mproc_to_zeta_map,
+    ; so the only way to reach the refusal is a caller that fills the array by
+    ; hand - which is what the check is for.
+    ;
+    ; Register use is deliberate: A is the only register this touches, and B,
+    ; C and D still hold the three pages the OUTs below need.
+    ld a, d
+    cp #0x23
+    jr nz, _enter_userspace_refused
+
+    ; Bank 0 is always kernel page 0x20
+    ld a, #0x20
+    out (0x78), a
+    
+    ; Bank 1 = pages[1] (was in B)
+    ld a, b
+    out (0x79), a
+    
+    ; Bank 2 = pages[2] (was in C)
+    ld a, c
+    out (0x7A), a
+    
+    ; Bank 3 = pages[3] (now in D)
+    ld      a, d
+    out     (0x7B), a
+
+    ; Publish the same four pages into the window-0 mirror.
+    ;
+    ; This entry writes the bank registers itself instead of going through
+    ; write_all_banks(), and write_all_banks() is the only thing that keeps
+    ; _muzix_live_banks in step (context_switch.c).  The trap on the next
+    ; syscall reads that mirror to learn which map it displaced, and copies it
+    ; into _g_saved_user_context for the exit path to restore - so with the
+    ; mirror still holding the kernel map from the last write_all_banks(), this
+    ; process's first syscall handed it the *kernel* map back: it resumed
+    ; running kernel code under its own stack, the `ret` at the end of the trap
+    ; popped a return address out of kernel *code* in window 1, and the machine
+    ; wandered into the boot stub and re-entered kernel_main.
+    ;
+    ; Window 0 is page 0x20 in the kernel map and in every process map, so these
+    ; four writes are safe on both sides of the switch above, and none of them
+    ; touches the stack.
+    ld      hl, #_muzix_live_banks
+    ld      (hl), #0x20
+    inc     hl
+    ld      (hl), b
+    inc     hl
+    ld      (hl), c
+    inc     hl
+    ld      (hl), d
+
+    ; Do NOT touch the stack from here: the map is now the process's, so window
+    ; 3 - which holds the kernel stack - maps the process's page.  The earlier
+    ; push/pop pair "restored" two words nobody needed, and each of them read and
+    ; wrote a window that had just stopped being the kernel's; the `call` below
+    ; pushed a return address into the same dead window.  Fall straight through
+    ; into the window-0 jump routine, which uses no stack.
+
+    ; Jump to the process entry point (window-0 code, no stack use)
+    jp _muzix_zeta_jump_to_entry
+
+_enter_userspace_refused:
+    ; Output '!' and spin
+    ld a,#'!'
+    call _muzix_zeta_uart_send
 _enter_userspace_spin:
     halt
     jr _enter_userspace_spin
@@ -138,28 +283,36 @@ _muzix_zeta_resume_from:
     ld      l, a
     ld      de, #_muzix_resume_banks
 
-    call    _zeta_resume_process    ; installs the map, then returns
-                                    ; (the window-0 cells above survive it)
-    call    _zeta_resume_jump       ; loads SP and PC, never returns
+    call    _zeta_resume_process    ; installs map and jumps to process, never returns
 
 _enter_resume_spin:
     halt
     jr      _enter_resume_spin
 
-; Load the stack and program counter of a saved process and go.  Window 0, and
-; never returns.  The cells are filled by muzix_zeta_resume_from above, after
-; the map has already been installed, so this must be here rather than in the C
-; it is called from: window 1 is a process page by this point and would not hold
-; the instructions.
-; Written in assembly because SDCC's inline assembler cannot emit `ld sp,hl`.
-_zeta_resume_jump:
-    ld      sp, (_g_resume_sp)
-    ld      de, (_g_resume_ret)
-    ld      hl, (_g_resume_pc)
-    jp      (hl)
+; Resume point published by the syscall trap (window 1 mapped, user stack visible).
+; These live in _CODE (window 0) so they survive the map switch.
+.globl _muzix_resume_pc
+.globl _muzix_resume_sp
+.globl _muzix_resume_ret
+.globl _muzix_resume_banks
+.globl _muzix_switch_pending
+.globl _muzix_userspace_banks
+_muzix_resume_pc:
+    .dw #0
+_muzix_resume_sp:
+    .dw #0
+_muzix_resume_ret:
+    .dw #0
+_muzix_resume_banks:
+    .ds 4
+_muzix_switch_pending:
+    .dw #0
+_muzix_userspace_banks:
+    .ds 4
 
 ; Window-0 storage for the entry point. Deliberately in _CODE and not _DATA:
 ; _DATA is in window 3 and is remapped away by this very transition.
+.globl _g_enter_entry_asm
 _g_enter_entry_asm:
     .dw #0
 
@@ -172,3 +325,31 @@ _g_resume_sp:
     .dw #0
 _g_resume_ret:
     .dw #0
+
+; Local copy for zeta_enter_process to read BEFORE the map changes.
+_g_enter_entry_asm_local:
+    .dw #0
+
+; Boot phase return-to-kernel support
+_muzix_zeta_jump_to_entry:
+    ld hl, (_g_enter_entry_asm_local)
+    jp (hl)
+
+_muzix_boot_phase_return_addr:
+    .dw #0
+
+; Mirror of the four bank registers, in window 0 so the syscall trap can read
+; what is currently mapped while window 2 is still the process's own page.
+; write_all_banks() keeps it in step with every map it installs, which is why
+; the trap can trust it: the alternative is reading the ports, which are
+; write-only, or reading state->bank_reg[] in _DATA, which is window 2 and
+; therefore not the kernel's page at that point.
+_muzix_live_banks:
+    .ds 4
+
+; Helper to write entry point from C (avoids fragile inline asm).
+; Called as: void muzix_set_entry_point(uint16_t entry)
+; Entry point passed in HL (sdcccall(1) convention).
+_muzix_set_entry_point:
+    ld (_g_enter_entry_asm), hl
+    ret

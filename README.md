@@ -1,10 +1,11 @@
 # Muzix
 
-Muzix is an independent operating system for the Zilog Z80 and the Zeta SBC
-V2. It draws on selected ideas from MINIX 1.0 and uses the MINIX-v1 filesystem
-format, but it is not a MINIX port and does not implement the MINIX ABI.
-Some low-level Zeta V2 support routines and techniques have been adapted from
-FUZIX; Muzix is not a FUZIX port or fork.
+Muzix is an operating system for the Zilog Z80 and the Zeta SBC
+V2. It uses the MINIX-v1 filesystem format and draws on selected ideas from
+MINIX 1.0 (message-passing IPC, cooperative scheduling, priority queues).
+Some low-level Zeta V2 support routines and techniques are adapted from
+FUZIX (DS1302 RTC, NS16550 UART, Z80 saved-stack/switch-out patterns,
+bank-switch conventions).
 
 https://github.com/user-attachments/assets/4791f19b-e926-4950-8006-2b37b8837c56
 
@@ -26,10 +27,10 @@ process. UART interrupts wake waiting processes. `time()` reads the calendar
 from the DS1302 and converts it to seconds since 2000-01-01; `uptime()` uses an
 RTC reading captured at boot.
 
-Muzix does not provide the complete MINIX ABI or its full set of servers and
-drivers. For example, `wait()` currently reaps an already-exited child once
-or returns `-1`; pipes are bounded and do not block the calling process. For
-implementation limits and platform rules, see [`AGENTS.md`](./AGENTS.md)
+Muzix implements a subset of the MINIX ABI: `wait()` reaps an
+already-exited child once or returns `-1`, and pipes are bounded without
+blocking the caller. For implementation limits and platform rules, see
+[`AGENTS.md`](./AGENTS.md)
 
 ## Low-level code origins
 
@@ -37,7 +38,7 @@ Selected Zeta V2 hardware routines and patterns were adapted from FUZIX:
 DS1302 transactions and write-only port shadowing, NS16550 divisor setup, and
 Z80 stack-saving, switch-out, and idle patterns. FUZIX was also used as a
 reference when checking the bank map and peripheral behavior. These are
-selective adaptations, not a wholesale FUZIX port: Muzix has its own process
+Selective adaptations: Muzix has its own process
 model, syscall ABI, CTC divisor chain, allocator, and filesystem. The
 components and their attribution are documented in
 [`docs/hardware-notes.md`](./docs/hardware-notes.md). Preserve applicable

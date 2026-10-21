@@ -284,7 +284,45 @@ MUZIX_IM1_VECTOR .equ  0x0038
 ; ordering below makes every read exact or one tick stale, and never wrong.
 ;
 ; Low byte first (that is the byte at this label), high byte at label+1.
-.area _DATA
+; ---------------------------------------------------------------------------
+; THE ISR'S CELLS LIVE IN _CODE, WHICH IS WINDOW 0, NOT IN _DATA.  THIS IS NOT
+; A STYLE CHOICE - it is the fix for a measured defect, and the history is the
+; reason it is worth a paragraph.
+;
+; This area used to be `.area _DATA`, on the argument quoted all over this file
+; ("_DATA is linked into window 3, so window 3 is page 0x23 - the kernel's own").
+; That argument was true of an older link and is FALSE of this one:
+; build/kernel.map places s__DATA at 0xB300, and _DATA therefore runs
+; 0xB300-0xC7AC - its first 0xD00 bytes are in WINDOW 2 ($8000-$BFFF), which is
+; exactly the window a process map replaces with the process's text page.  Only
+; the tail past 0xC000 is the shared window 3.
+;
+; The consequence was measured with the current ROM: the tick counter and this
+; probe byte are at 0xB300 and 0xB302.  Every tick that landed while the FS
+; server's map was installed (banks=20 25 24 23) read and WROTE the FS's own
+; text page instead of the kernel's cells:
+;   - `ld a,(_muzix_tick_probe)` read fs_server.bin offset 0x3306 = 0xE1, the
+;     non-zero test passed, and `out (0x68),a` printed 0xE1 to the console - 43
+;     times per run, interleaved into the shell's banner, deterministically.
+;   - `inc (hl)` on _muzix_tick_count wrote a byte of the FS's code: the zero
+;     immediate of server.c's `ld de,#0x0000` became 0x002B over 43 ticks.
+;   - A keystroke arriving under a process map would have set _uart_rx_pending
+;     on the PROCESS's page, where muzix_uart_rx_pending() never looks, so the
+;     scheduler's wake_input would never have seen it.
+; tools/check_window0.rb pins this very module in window 0 and its own comment
+; tells the same story from the last time it happened ("the counter is at 0xFA26
+; in _DATA, and the handler was at 0xFA43 with it"); the pin checked the code and
+; not the cells, so the module was half safe - code in window 0, data in window
+; 2 - and that half was the half that mattered least.
+;
+; _CODE is the answer for the same reason it is the answer for _g_syscall_result
+; and the _muzix_resume_* cells in kernel_entry.s: window 0 is the one window no
+; process map touches, and the kernel's image is LDIR'd from ROM into RAM pages
+; 32-35 at boot, so cells up here are as writable as anything in _DATA.  The
+; cost is 0x14 bytes of _CODE, and the benefit is that the ISR's entire working
+; set is now visible to it at every instant, which is the invariant its own
+; comment at "WHAT IT TOUCHES" has claimed all along.
+.area _CODE
 _muzix_tick_count:
 	.dw #0
 
@@ -343,8 +381,6 @@ _muzix_tick_calibration_elapsed_ticks:
 	.dw #0
 
 ; ------------------------------------------------------------------ code ---
-
-.area _CODE
 
 ; Program channel 1, plant the IM1 vector, and let interrupts in.
 ;
@@ -491,9 +527,28 @@ _muzix_tick_init:
 ;   reaches code whose location depends on the map, and the first thing almost
 ;   any such routine does is touch a _DATA static - fine - or a bank register -
 ;   fatal, because the handler is running at an arbitrary point inside a map
-;   change.  Keeping the whole handler here, in six pushes, one increment and a
-;   RETI, is what makes "safe under any map" a property of the code rather than
-;   of the moment it happens to run in.
+;   change.  Keeping the whole handler here, in two exchanges, four pushes, one
+;   increment and a RETI, is what makes "safe under any map" a property of the
+;   code rather than of the moment it happens to run in.
+;
+; WHY AF,BC,DE,HL ARE SAVED BY EXCHANGE AND NOT BY PUSH
+; ----------------------------------------------------
+; Measured on 2026-10-15 against the emulator's cycle counter: the six-pair
+; save/restore this handler used to make costs 132 T-states of stack traffic
+; per tick, 120 ticks a second.  `exx` swaps BC/DE/HL with their alternates in
+; 4 T (D9, one byte) and `ex af,af'` does AF in another 4 (08, one byte), so
+; AF/BC/DE/HL now cost 16 T instead of 88, the handler is eight bytes smaller,
+; and the interrupted context is untouched because it is never written at all.
+; IX and IY stay on the stack: `exx` does not cover them, and the interrupted
+; C code uses them as frame pointers (SDCC's `___sdcc_enter_ix` frame entry is
+; in sdz80_runtime.s), so they must be preserved the old way.
+;
+; The precondition is that the alternate register set is free, and it is: this
+; tree uses EXX nowhere else (verified by grep over every .s and .c), and SDCC
+; never touches the alternates unless a module does.  That is now an ABI rule
+; and it belongs in AGENTS.md with it - EXX/EX AF,AF' are the interrupt
+; handlers' registers, and any future user of the alternate set outside an
+; interrupt handler silently corrupts one of them.
 ;
 ; THE COUNTER IS 16-BIT, AND THE ORDER IS THE POINT
 ; -------------------------------------------------
@@ -517,10 +572,8 @@ _muzix_tick_init:
 ; exists to prevent, and it is why the reader is not allowed to be "improved"
 ; into reading the low byte first for speed.
 _muzix_tick_isr:
-	push	af
-	push	bc
-	push	de
-	push	hl
+	ex	af,af'		; the alternate set is the handler's - see above
+	exx
 	push	ix
 	push	iy
 
@@ -538,10 +591,8 @@ _muzix_tick_isr:
 005$:
 	pop	iy
 	pop	ix
-	pop	hl
-	pop	de
-	pop	bc
-	pop	af
+	exx
+	ex	af,af'
 	ei
 	reti
 
@@ -592,11 +643,9 @@ _muzix_tick_isr:
 ; else.  Not even a port.  No tail call, for the reason above.
 
 _muzix_uart_rx_isr:
-	push	af
-	push	bc
-	push	de
-	push	hl
-
+	ex	af,af'		; same exchange trick as the tick handler: the
+	exx			; alternate set is the handlers' - see the note
+				; above the tick handler for why it is free
 	ld	hl,#_uart_rx_count
 	inc	(hl)
 	jr	nz,002$
@@ -606,10 +655,8 @@ _muzix_uart_rx_isr:
 	ld	a,#1
 	ld	(_uart_rx_pending),a
 
-	pop	hl
-	pop	de
-	pop	bc
-	pop	af
+	exx
+	ex	af,af'
 	ei
 	reti
 

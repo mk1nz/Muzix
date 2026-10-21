@@ -162,7 +162,15 @@ if File.readable?(makefile)
       body.scan(/[^\s\\]+/) { |t| library_refs << t unless t.end_with?('.rel') }
       in_order = false unless line.rstrip.end_with?('\\')
     end
-    if text =~ /sdldz80/ || text =~ /\A\s*-l/
+    # The linker is invoked as $(SDLDZ80) - the Makefile variable, not the bare
+    # command name.  A pattern that matches only /sdldz80/ therefore matches
+    # the variable's own definition line and nothing else: the two recipe
+    # passes that actually link the kernel read "$(SDLDZ80) -mjwx -i kernel.ihx",
+    # so this half of the rule never fired on the link it is about.  Both
+    # spellings are matched.  Matching whole lines that merely mention sdldz80
+    # is harmless: a comment still has to carry a -l<name> or <name>.lib token
+    # for the scan on the next line to see it.
+    if text =~ /sdldz80/ || text =~ /\$\(SDLDZ80\)/ || text =~ /\A\s*-l/
       library_refs.concat(text.scan(/(?:^|[\s])(-l\S+|\S+\.lib)\b/).flatten)
     end
   end

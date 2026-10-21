@@ -11,10 +11,10 @@
  *       name beginning with a dot except "." and "..", which are always listed.
  *   -R  would be nothing.  There are no subdirectories; the whole tree is the
  *       root, which is what `ls` prints.
- *   -t  and -l's usual date column would be nothing.  muzix_fs_inode_t has no
- *       timestamp field at all (fs/fs_types.h), so there is nothing to print
- *       and printing a zero or a dash would be a fiction.
- *   -F  would mark executables, and there is no executable bit: mode carries
+ *   -t  would be nothing.  There is no file type that would be useful here - the
+     *       image writer stamps a single build time onto every inode, which is
+     *       accurate but not sortable by name.
+     *   -F  would mark executables, and there is no executable bit: mode carries
  *       only a type, and make_minixfs.rb writes one mode for the root and none
  *       for the files.
  *
@@ -245,11 +245,18 @@ static void show(const char *dir, const struct dirent *entry, int long_fmt)
         puts("      ?");
     }
     putchar(' ');
+    if (known) {
+        put_size(info.mtime, 10);
+    } else {
+        puts("         ?");
+    }
+    putchar(' ');
     puts(entry->name);
 }
 
-int main(int argc, char *argv[])
+int main(int argc, const char *argv[])
 {
+    char resolved[LS_PATH_MAX] = ".";
     const char *path = ".";
     int long_fmt = 0;
     int ones_only = 0;
@@ -299,6 +306,29 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* Build an absolute path: if `path` is "." or doesn't start with "/",
+     * prepend the cwd so the kernel ROM FS interceptors resolve it correctly.
+     * The kernel's ROM FS is flat and doesn't track cwd per-process, so
+     * relative paths must be resolved by the caller. */
+    if (path[0] != '/') {
+        char cwd[LS_PATH_MAX];
+        if (sys_getcwd(cwd, sizeof(cwd)) != NULL) {
+            size_t cwd_len = strlen(cwd);
+            size_t path_len = strlen(path);
+            if (strcmp(path, ".") == 0 || strcmp(path, "./") == 0) {
+                strcpy(resolved, cwd);
+                path = resolved;
+            } else if (cwd_len + 1 + path_len + 1 <= sizeof(resolved)) {
+                strcpy(resolved, cwd);
+                if (cwd[cwd_len - 1] != '/') {
+                    resolved[cwd_len] = '/';
+                    cwd_len++;
+                }
+                strcpy(resolved + cwd_len, path);
+                path = resolved;
+            }
+        }
+    }
     fd = open(path, 0);
     if (fd < 0) {
         puts("ls: cannot open directory");

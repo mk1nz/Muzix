@@ -1,6 +1,5 @@
 #include "syscall_runtime.h"
 #include "bank_io.h"
-#include "uart_io.h"
 #include "context_switch.h"
 #include "trace.h"
 
@@ -53,6 +52,8 @@ void muzix_zeta_syscall_runtime_init(
     muzix_kernel_loop_t *loop,
     muzix_fs_service_t *fs)
 {
+    (void)fs;
+
     if (!runtime) {
         return;
     }
@@ -76,41 +77,18 @@ void muzix_zeta_syscall_runtime_init(
         }
         g_slot++;
     }
-    /* g_cached_map is resolved but deliberately not pushed into any bank
-     * shadow here. Writing bank state from this layer was outside the platform
-     * layer's map machinery, and the shadow it would have gone into
-     * (_user_banks in bank_io.s) was never read on the boot path - the userspace
-     * handoff loads muzix_userspace_banks instead.  That shadow was removed
-     * with the dead entry points that wrote it, on 2026-02-02. */
     runtime->kernel.loop = loop;
     runtime->kernel.mm = loop->mm;
-    /* Same object as runtime->kernel.loop->system.startup.proc_table, and the
-     * one muzix_system_task_handle_syscall() hands to its own kernel context.
-     * It was left unset here, which was harmless while the only reader was a
-     * path that had gone away - and then SYS_LOAD read it and got a NULL, so
-     * the load display reported 0.00 forever.  Set it so the field means what
-     * its name says whatever a future caller assumes. */
     runtime->kernel.process_table = &loop->system.startup.proc_table;
-    g_runtime_state = &loop->mm->zeta;
     runtime->userspace.kernel = &runtime->kernel;
-    runtime->userspace.fs = fs;
-    runtime->fs = fs;
+    runtime->userspace.fs = 0;
+    runtime->userspace.vm_base = 0;
+    runtime->fs = 0;
     runtime->userspace.pid = muzix_kernel_loop_current_pid(loop);
     runtime->userspace.ppid = -1;
-    muzix_tty_device_init(&runtime->tty);
-    muzix_zeta_uart_init();
-    muzix_tty_device_set_callbacks(&runtime->tty,
-                                   muzix_zeta_uart_send,
-                                   muzix_zeta_uart_recv,
-                                   muzix_zeta_uart_available,
-                                   0);
-    if (fs) {
-        muzix_fs_service_attach_tty(fs, &runtime->tty);
-    }
     muzix_z80_set_mapping_hooks(syscall_enter_kernel_hook,
                                 syscall_restore_user_hook);
     muzix_z80_bind_userspace_context(&runtime->userspace);
-    muzix_set_syscall_entry(muzix_z80_userspace_syscall_entry);
     runtime->bound = 1;
 }
 
@@ -122,13 +100,9 @@ void muzix_zeta_syscall_runtime_reset(
     }
 
     if (runtime->bound) {
-        muzix_set_syscall_entry(0);
         muzix_z80_bind_userspace_context(0);
         muzix_z80_set_mapping_hooks(0, 0);
         g_runtime_state = 0;
-    }
-    if (runtime->fs && runtime->fs->tty == &runtime->tty) {
-        muzix_fs_service_attach_tty(runtime->fs, 0);
     }
     memset(runtime, 0, sizeof(*runtime));
 }

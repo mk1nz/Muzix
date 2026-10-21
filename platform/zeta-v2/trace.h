@@ -23,6 +23,18 @@
  * exactly the run whose byte count must not stop moving.
  */
 
+/*
+ * Trace can be enabled at runtime via emulator -t flag.
+ * The emulator writes to TRACE_ENABLE_ADDR (0xFC00) at startup if -t is given.
+ * The kernel checks this address at initialization.
+ * Using common memory area (0xFC00-0xFFFF) which is not banked.
+ */
+#define TRACE_ENABLE_ADDR 0xFC00
+
+extern uint8_t g_muzix_trace_enabled;
+
+#define MUZIX_TRACE_ENABLED (g_muzix_trace_enabled || (*(volatile uint8_t*)TRACE_ENABLE_ADDR != 0))
+
 #define MUZIX_TRACE_RING_SIZE 128u
 
 void muzix_trace_putc(uint8_t c);

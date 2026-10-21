@@ -39,6 +39,17 @@ int muzix_fs_directory_add(muzix_fs_directory_t *directory,
         if (directory->entries[slot].inode == 0) {
             directory->entries[slot].inode = inode;
             memset(directory->entries[slot].name, 0, MUZIX_FS_NAME_MAX);
+            /* Fourteen bytes is the whole slot, so a name of fourteen
+             * characters is stored in full and carries no terminator - and
+             * fourteen is what muzix_fs_name_valid accepts and what the image
+             * tool writes.  Truncating to thirteen would put the name back out
+             * of reach of the very operations that have to find it again (see
+             * the note in fs_service.c's path normaliser), so the slot keeps
+             * all fourteen bytes and every reader of a name compares it
+             * bounded: muzix_fs_directory_lookup() and
+             * muzix_fs_directory_remove() use strncmp(..., MUZIX_FS_NAME_MAX)
+             * and the rename ".." search does the same.  Nothing may call
+             * strcmp, strlen or strcpy on an entry name. */
             memcpy(directory->entries[slot].name, name, strlen(name));
             return 0;
         }

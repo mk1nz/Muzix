@@ -1,8 +1,6 @@
 #include "superblock.h"
 
 #include <string.h>
-#include "../platform/zeta-v2/uart_io.h"
-#include "../platform/zeta-v2/trace.h"
 
 #define MUZIX_FS_SUPERBLOCK_BLOCK 1u
 

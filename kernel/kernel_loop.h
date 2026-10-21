@@ -21,6 +21,7 @@ typedef struct muzix_kernel_loop {
     uint32_t tick;
     int current_pid;
     struct muzix_mm_service *mm;
+    uint8_t in_boot_phase;
 } muzix_kernel_loop_t;
 
 void muzix_kernel_loop_init(muzix_kernel_loop_t *loop,

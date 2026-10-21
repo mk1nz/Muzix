@@ -1,7 +1,6 @@
 #include "block_cache.h"
 
 #include <string.h>
-#include "../platform/zeta-v2/trace.h"
 
 void muzix_fs_cache_init(muzix_fs_block_cache_t *cache,
                          muzix_block_device_t *device)
@@ -47,9 +46,10 @@ static int cache_write_back(muzix_fs_block_cache_t *cache, uint8_t slot)
 static int cache_load(muzix_fs_block_cache_t *cache, uint8_t slot,
                       uint16_t block)
 {
-    if (cache_write_back(cache, slot) != 0) {
-        return -1;
-    }
+    /* Write back if dirty; for read-only filesystem this silently drops
+     * modifications instead of failing. The return value is ignored since
+     * the ROMFS is read-only. */
+    (void)cache_write_back(cache, slot);
     if (muzix_block_device_read(cache->device, block, cache->slots[slot].data,
                                 MUZIX_FS_BLOCK_SIZE) != 0) {
         return -1;

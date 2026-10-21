@@ -6,6 +6,15 @@
 *.map
 *.sym
 *.noi
+*.cdb
+
+# ...but lib/server_crt0.asm is the ONE *.asm the build never writes: it is
+# the hand-written userspace server startup that FS/MM/PM link, and the same
+# glob that keeps build output out of the index kept the source out with it.
+# That is why `make clean` deleting it was not recoverable from git, and why
+# the build stopped at "No rule to make target lib/server_crt0.asm".  The
+# exception mirrors the /test_host/ one above: name the source, keep the glob.
+!lib/server_crt0.asm
 
 # *.lk is NOT here, and used to be.  These are hand-written linker scripts, not
 # toolchain output: sdldz80 takes one with -f and never writes one.  Measured by

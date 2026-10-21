@@ -9,6 +9,7 @@
 #define MUZIX_SYSCALL_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include "proc_info.h"
 
@@ -56,8 +57,14 @@
 #define SYS_UMASK     60   /* Set file creation mask */
 
 /* Syscall Numbers - System */
-#define SYS_SYNC      30   /* Sync filesystem */
-#define SYS_SIGNAL    31   /* Signal handling */
+#define SYS_SYNC       30   /* Sync filesystem */
+#define SYS_SIGNAL     31   /* Signal handling */
+#define SYS_IPC_SENDREC 50  /* IPC send/receive */
+#define SYS_IPC_SEND   55   /* IPC send only - no receive half (MINIX send()) */
+#define SYS_IPC_COPY_TO_USER 51  /* Copy kernel to user (current process) */
+#define SYS_IPC_COPY_FROM_USER 52 /* Copy user to kernel (current process) */
+#define SYS_IPC_SRV_COPY_TO_CLIENT 53  /* Server copy to client (uses IPC msg source) */
+#define SYS_IPC_SRV_COPY_FROM_CLIENT 54 /* Server copy from client (uses IPC msg source) */
 #define SYS_READDIR    40  /* Read a directory entry */
 
 /* Message format for IPC (same as kernel) */
@@ -298,5 +305,15 @@ int32_t sys_umask(int32_t mask);
 /* Sync - Synchronize filesystem */
 int32_t sys_sync(void);
 int32_t sys_readdir(int32_t fd, int32_t index, void *entry);
+int32_t sys_ipc_sendrec(int32_t dest_slot, void *msg);
+int32_t sys_ipc_send(int32_t dest_slot, void *msg);
+
+/* Copy functions */
+int32_t sys_ipc_copy_to_user(uint16_t addr, const void *buf, size_t len);
+int32_t sys_ipc_copy_from_user(uint16_t addr, void *buf, size_t len);
+
+/* Server copy functions (use IPC message source as target process) */
+int32_t sys_ipc_srv_copy_to_client(uint16_t addr, const void *buf, size_t len);
+int32_t sys_ipc_srv_copy_from_client(uint16_t addr, void *buf, size_t len);
 
 #endif /* MUZIX_SYSCALL_H */

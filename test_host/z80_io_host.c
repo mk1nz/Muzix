@@ -174,6 +174,12 @@ void muzix_zeta_uart_init(void)
 {
 }
 
+/* The kernel orders this after muzix_tick_init(); off the board there is no
+ * CTC to arm first, so there is nothing for the host stub to model. */
+void muzix_zeta_uart_rx_irq_enable(void)
+{
+}
+
 void muzix_zeta_uart_send(uint8_t byte, void *userdata)
 {
     (void)byte;

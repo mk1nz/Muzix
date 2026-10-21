@@ -1,3 +1,7 @@
+/*
+ * kernel/kernel_loop.c - Scheduler dispatch loop
+ */
+
 #include "kernel_loop.h"
 #include "load.h"
 
@@ -14,11 +18,96 @@
 
 #include <string.h>
 
-extern uint16_t muzix_userspace_entry;
+extern uint16_t g_enter_entry_asm;
 extern uint8_t muzix_userspace_banks[4];
+extern uint16_t muzix_resume_pc;
+extern uint16_t muzix_resume_sp;
+extern uint16_t muzix_resume_ret;
+extern uint8_t muzix_resume_banks[4];
 
 extern uint16_t g_bind_slot;
 extern uint16_t g_bind_pid;
+
+extern void muzix_set_entry_point(uint16_t entry);
+
+/* ---- the load windows, folded from the scheduler's idle path ---------------
+ *
+ * THE SCHEME, AND WHY IT IS HERE AND NOWHERE ELSE
+ * -----------------------------------------------
+ * The three windows are a partition of WALL time: every cycle is either
+ * executing or the processor is stopped in HALT, and the figure is the
+ * executing share.  So a sample needs two things and nothing else - the wall
+ * length of an interval, which the tick gives, and the halted time inside it,
+ * which kernel_halt() accumulates with muzix_load_note_halted().
+ *
+ * One interval ends exactly where this file knows both: after a halt returns.
+ * That is the only moment the kernel is provably awake, provably holding the
+ * table, and provably running with the kernel map installed (see
+ * muzix_kernel_loop_run()'s note about windows 0 and 3).  The interval it
+ * closes runs from the last sample to now, so it covers everything the machine
+ * did in between - busy work included, because a busy interval between two
+ * halts is still an interval whose wall length the tick counts.  Nothing has
+ * to sample at a syscall boundary to catch busy time: busy time is simply what
+ * is left of the interval once the halts are subtracted.
+ *
+ * There is no per-tick sampling here and there cannot be: the tick handler may
+ * address windows 0 and 3 only (platform/zeta-v2/tick.s argues it at length),
+ * and this module lives in window 1.  There is also no sampling from inside
+ * the halt itself, and that is not a distinction without a difference - the
+ * halt is where the machine is NOT running, and a sample taken there would be
+ * measuring the loop around it.
+ *
+ * WHY THE SAMPLES ARE THROTTLED TO ONE EVERY 15 SECONDS
+ * -----------------------------------------------------
+ * muzix_load_sample() is not cheap: the busy fraction is a quotient computed by
+ * repeated subtraction (load_div in load.c), so it costs roughly the quotient
+ * in iterations - up to 16384 of them, each a 32-bit compare-and-subtract - and
+ * the exponential step is a walk over the exponent's bits doing six of the Q14
+ * multiplies.  Sampling on every halt would spend that 120 times a second,
+ * which is a measurable fraction of the processor on a machine whose whole job
+ * is to report how busy the processor is, and it would be charging the
+ * measurement to the measurement.
+ *
+ * 15 seconds is not an arbitrary rate limit.  The decay exponent is WHOLE
+ * seconds - load.c's "one known limit" says so - so a sample interval under
+ * half a second buys no decay at all, and a machine asked more often than that
+ * is answered identically.  One sample every 15 seconds keeps the three windows
+ * moving on their own terms: four samples inside the shortest constant, one
+ * inside the middle one, and the staircase the whole-second exponent already
+ * imposes.  A reader that wants a fresher figure still gets one, because
+ * SYS_LOAD samples on read (kernel/syscalls_ipc.c's muzix_handle_load()).
+ *
+ * The throttle is a watermark of the last sample and not a counter, so it costs
+ * one uint16_t in _DATA and a wrap-safe subtraction - the same shape
+ * muzix_tick_expired() uses - and a machine that idles continuously samples
+ * every 15 seconds from the first halt on rather than after 15 seconds of
+ * waiting for the counter to fill.
+ */
+#define MUZIX_LOAD_IDLE_SAMPLE_TICKS \
+    ((uint16_t)(15u * MUZIX_TICKS_PER_SECOND))
+
+static uint16_t g_load_idle_tick;
+
+/* Fold the interval that just ended, if the throttle allows it.
+ *
+ * `table` is the one argument the module insists on - muzix_load_sample()
+ * refuses a NULL one - and the reason it is passed at all is testability: the
+ * figure no longer comes out of the table, but the requirement keeps a test
+ * able to drive the module with a table of its own. */
+static void muzix_load_idle_sample(muzix_kernel_proc_table_t *table)
+{
+    uint16_t now;
+
+    if (!table) {
+        return;
+    }
+    now = muzix_tick_now();
+    if ((uint16_t)(now - g_load_idle_tick) < MUZIX_LOAD_IDLE_SAMPLE_TICKS) {
+        return;
+    }
+    g_load_idle_tick = now;
+    muzix_load_sample(table, now);
+}
 
 void muzix_kernel_loop_init(muzix_kernel_loop_t *loop,
                             const process_map_t *kernel_map,
@@ -158,6 +247,26 @@ static uint8_t g_cycle_mark_valid;
  * Every idle halt goes through here rather than calling z80_halt() directly: a
  * halt nobody measured is an interval the figure cannot see.
  *
+ * AND IT IS AN UNCOUNTED HALT, NOT A PLAIN ONE
+ * --------------------------------------------
+ * The stop is muzix_proc_halt_uncounted() and not z80_idle_halt(), which is
+ * what makes this function the first caller that mechanism has ever had.  The
+ * charge the kernel bills a process with is the wall time between the two
+ * ends of a system call, so a halt taken while a call is in flight - a park
+ * that switches out through muzix_kernel_switchout() and lands here - would
+ * otherwise be charged as that process's SYSTEM time, and a machine standing
+ * still would report itself as busy.  The uncounted halt refreshes the
+ * accounting stamp on both sides of the stop, so the interval it spans is
+ * charged to nobody, which is the truth: the processor was not executing and
+ * neither was the process.
+ *
+ * The two stamp stores sit INSIDE the CTC3 bracket, which costs a fraction of
+ * one count of 256 cycles against a halt of about 130 - the halted figure is
+ * overstated by at most one part in 130 of one halt, and only on the halts
+ * where a syscall is actually in flight.  The alternative, a second entry
+ * point to bracket the halt and stamp outside it, is more code for a
+ * correction smaller than the counter's own resolution.
+ *
  * muzix_tick_cycles() reads a port, which is not memory and so is unaffected by
  * any map, and this runs from ordinary kernel context rather than from the
  * handler - so it sits on the safe side of the argument in
@@ -167,6 +276,19 @@ static void kernel_halt(void)
     uint8_t before;
     uint8_t after;
 
+    /* The stop itself lives inside muzix_proc_halt_uncounted() (kernel/
+     * proc_table.c) - it is a HALT, not a bookkeeping stamp, and the bracket
+     * below measures it.  Do NOT "restore the halt" by adding a second
+     * z80_idle_halt() here: this machine shipped with one once, and the double
+     * stop waited for a second interrupt on every idle turn for no gain.
+     *
+     * AND THE STORM THIS ROUND: kernel_halt() used to stop by calling
+     * muzix_proc_halt_uncounted() as well, and that function used to stamp
+     * g_accounted->tick_stamp on both sides of its halt - overwriting the
+     * parked slot's deadline with `now`, so wake_expired() requeued it every
+     * scheduler pass and an idle prompt ran at 96-99% busy with the load
+     * figure pinned at 1.00.  The stamp is gone from that function for exactly
+     * that reason; the brackets here only READ the counter. */
     if (!g_cycle_mark_valid) {
         /* The first halt is not measured - there is no earlier reading to measure
          * it against, and a difference against zero would be an arbitrary number
@@ -176,12 +298,12 @@ static void kernel_halt(void)
          * being measured from then on. */
         (void)muzix_tick_cycles();
         g_cycle_mark_valid = 1u;
-        z80_idle_halt();
+        muzix_proc_halt_uncounted();
         return;
     }
 
     before = muzix_tick_cycles();
-    z80_idle_halt();
+    muzix_proc_halt_uncounted();
     after = muzix_tick_cycles();
     /* uint8_t, NOT uint16_t.  The counter is 8 bits and wraps, so the elapsed
      * time is the difference taken modulo 256 - and 1 - 255 across a wrap is -254,
@@ -196,6 +318,46 @@ static void kernel_halt(void)
      * The modulo is not handled here - it falls out of the cast, which is why the
      * width is the whole content of the expression. */
     muzix_load_note_halted((uint8_t)(before - after));
+}
+
+/* Wake parked readers because a byte is waiting - by LEVEL, not only by flag.
+ *
+ * THE FLAG ALONE WAS NOT ENOUGH, AND THE MISSING CASE WAS MEASURED
+ * ---------------------------------------------------------------
+ * The UART handler raises a one-shot flag and this loop used to turn that flag
+ * into wake_input() and nothing else.  The flag is edge-shaped and the receive
+ * FIFO is level-shaped, and two measured moments fall between them:
+ *
+ *   - a byte that arrived before the reader parked.  The interrupt fires, the
+ *     flag is raised, and an idle pass consumes it while NO slot is parked yet
+ *     (or while only servers are).  The byte is still sitting in the FIFO, but
+ *     the flag that announced it is gone, so the reader that parks afterwards
+ *     waits out its full 240-tick deadline - the "рывками" console: the first
+ *     characters after boot were always late by two seconds.
+ *
+ *   - the reverse race on the emulator and on hardware alike: the consumer is
+ *     between "the FIFO says empty" and "park" when the byte lands.  The edge
+ *     then fires while nothing is parked and one pass eats it.
+ *
+ * The level is the truth here: while the 16550 reports data ready, some parked
+ * reader is waiting for that data, so the wake is re-armed on every pass
+ * instead of being spent once.  The cost is one IN on a halt return, and the
+ * result is bounded by the byte, not by the deadline: the reader wakes on the
+ * pass that follows the halt the byte interrupted, or within one tick of it.
+ *
+ * wake_input() still wakes EVERY parked slot - there is no "parked on the tty"
+ * bit in the slot to select with - so a process parked on a pipe wakes, finds
+ * nothing and parks again.  That spurious wakeup is unchanged and bounded by
+ * how often input arrives, which is exactly what the flag path did.
+ *
+ * The flag is still read first and still cleared by reading it: it is what
+ * counts ISR entries for anyone watching, and short-circuiting on it keeps the
+ * port read off the common path where no interrupt has occurred at all. */
+static void kernel_wake_console_readers(muzix_kernel_proc_table_t *table)
+{
+    if (muzix_uart_rx_pending() || muzix_zeta_uart_available(0)) {
+        (void)muzix_proc_table_wake_input(table);
+    }
 }
 
 void muzix_kernel_switchout(muzix_kernel_loop_t *loop)
@@ -227,15 +389,45 @@ void muzix_kernel_switchout(muzix_kernel_loop_t *loop)
              * character typed half a second into a park was not looked at for one and
              * a half seconds.  That is what made a machine that was finally no longer
              * burning the processor still feel like it was busy. */
-            if (muzix_uart_rx_pending()) {
-                (void)muzix_proc_table_wake_input(table);
-            }
+            kernel_wake_console_readers(table);
+            muzix_load_idle_sample(table);
             continue;
         }
-        next = muzix_proc_table_pick_next(table);
-        if (next >= 0) {
-            break;
+next = muzix_proc_table_pick_next(table);
+    if (next >= 0) {
+        
+        /* If the next process has a valid resume point (was parked in a syscall),
+         * use the resume path instead of the entry point path. */
+        muzix_proc_slot_t *next_slot = &table->slots[next];
+        if (next_slot->resume_valid) {
+            /* Set up resume point for context switch. The trap will handle it. */
+            muzix_context_switch_to(table, next);
+            return;  /* Return to trap, which will call muzix_zeta_resume_from */
         }
+        
+        /* A slot with no resume point is one that has never run, or whose image
+         * was just replaced - an exec.  The main loop below handles that case by
+         * setting the entry point and the banks and calling
+         * muzix_zeta_enter_userspace(), which never returns; this function used
+         * to `break` out of the loop and RETURN to whoever called it, so the
+         * fresh entry was never taken from here.  That caller is the exec
+         * handler: it had loaded the new image, cleared resume_valid, and asked
+         * for a switch - and then received the return and ran its `return 0`,
+         * which the trap delivered to the exec'ing process at its own return
+         * address, IN THE JUST-REPLACED MAP.  Measured: the exec'd app ran from
+         * that wrong entry point, printed real output, and then the old image's
+         * "cannot execute" path ran behind it - one process living in two
+         * images at once.  Do here exactly what the main loop does, so a switch
+         * to a fresh slot completes the switch instead of handing control back
+         * to the syscall that asked for it. */
+        muzix_set_entry_point(next_slot->entry_point);
+        muzix_userspace_banks[0] = next_slot->map.pages[0];
+        muzix_userspace_banks[1] = next_slot->map.pages[1];
+        muzix_userspace_banks[2] = next_slot->map.pages[2];
+        muzix_userspace_banks[3] = next_slot->map.pages[3];
+        loop->state = MUZIX_KERNEL_LOOP_RUNNING;
+        muzix_zeta_enter_userspace();     /* never returns */
+    }
         /* should_idle() said there was work and pick_next() found none.  Those
          * two cannot disagree while the table is sound: should_idle() returns 0
          * either because a deadline expired - and wake_expired() requeues through
@@ -260,12 +452,24 @@ void muzix_kernel_switchout(muzix_kernel_loop_t *loop)
          * There is no sleep here to bound: HALT is bounded by the interrupt, and
          * a wait that cannot end is not a wait. */
         kernel_halt();
-        if (muzix_uart_rx_pending()) {
-            (void)muzix_proc_table_wake_input(table);
-        }
+        kernel_wake_console_readers(table);
+        /* The interval that just ended is closed here, throttled; see
+         * muzix_load_idle_sample(). */
+        muzix_load_idle_sample(table);
+    }
+    /* Set up entry point and bank mappings for the next process, same as the
+     * yield and idle paths do. Without this, the process enters with stale
+     * or zero values and crashes. */
+    {
+        muzix_proc_slot_t *next_slot = &table->slots[next];
+        muzix_set_entry_point(next_slot->entry_point);
+        muzix_userspace_banks[0] = next_slot->map.pages[0];
+        muzix_userspace_banks[1] = next_slot->map.pages[1];
+        muzix_userspace_banks[2] = next_slot->map.pages[2];
+        muzix_userspace_banks[3] = next_slot->map.pages[3];
     }
     loop->state = MUZIX_KERNEL_LOOP_RUNNING;
-    muzix_context_switch_to(table, next);     /* never returns */
+    muzix_zeta_enter_userspace();     /* never returns */
 }
 
 void muzix_kernel_loop_run(muzix_kernel_loop_t *loop)
@@ -274,83 +478,112 @@ void muzix_kernel_loop_run(muzix_kernel_loop_t *loop)
         return;
     }
 
-    /* Nothing to dispatch: wake whoever is due, and if there is still nothing,
-     * stop the processor until the tick brings it back.
-     *
-     * `halt` is the right instruction for this on a Z80 and not a refinement.  It
-     * issues no bus cycles at all - no fetch, no read, no write - so the CPU is
-     * genuinely idle rather than spinning through a loop, which is the whole
-     * difference between a machine at rest and one burning power to look for work
-     * that is not there.  Any spin-wait alternative here would keep the load
-     * figure at 1.00 and describe nothing.
-     *
-     * It wakes on the 120 Hz CTC tick or a UART receive interrupt. Both are
-     * vectored through the CTC in IM2; the UART interrupt sets a pending flag
-     * which this loop turns into a process wake in ordinary kernel context.
-     * Neither interrupt preempts a running userspace process.
-     *
-     * muzix_proc_table_should_idle() refuses to say yes unless something is parked
-     * AND nothing is runnable, so the pre-boot state and the after-exit state both
-     * return instead of stopping.  See its comment for why that distinction is the
-     * difference between idling and hanging.
-     *
-     * This runs with the kernel map installed - it is reached from kernel_main's
-     * loop, never from the interrupt handler, which may address only windows 0 and
-     * 3 while this module is entirely inside window 1. */
-    if (muzix_proc_table_should_idle(&loop->system.startup.proc_table)) {
-        kernel_halt();
-        if (muzix_uart_rx_pending()) {
-            (void)muzix_proc_table_wake_input(&loop->system.startup.proc_table);
-        }
-    } else if (!muzix_proc_table_any_parked(&loop->system.startup.proc_table)) {
-        /* should_idle() said there was work, and nothing is parked - so nothing can
-         * become runnable either, because a deadline needs a park to expire.  That is
-         * the state the machine is in once the last process has exited, and it is a
-         * spin unless it is treated as the idleness it is: halt, and the tick
-         * returns 120 times a second to ask again.
+    /* This is the permanent idle process - it NEVER returns.
+     * It runs the scheduler loop forever, entering userspace processes
+     * and halting when nothing is runnable. */
+    for (;;) {
+        /* Nothing to dispatch: wake whoever is due, and if there is still nothing,
+         * stop the processor until the tick brings it back.
          *
-         * Same reasoning, and the same cost, as the halt in
-         * muzix_kernel_switchout() for the same state.  Both existed because
-         * should_idle() is a scheduler's question - "is there work, or may I rest"
-         * - and this is a different one, which is why it needed a second test
-         * rather than a change to the first. */
-        kernel_halt();
-        if (muzix_uart_rx_pending()) {
-            (void)muzix_proc_table_wake_input(&loop->system.startup.proc_table);
+         * `halt` is the right instruction for this on a Z80 and not a refinement.  It
+         * issues no bus cycles at all - no fetch, no read, no write - so the CPU is
+         * genuinely idle rather than spinning through a loop, which is the whole
+         * difference between a machine at rest and one burning power to look for work
+         * that is not there.  Any spin-wait alternative here would keep the load
+         * figure at 1.00 and describe nothing.
+         *
+         * It wakes on the 120 Hz CTC tick or a UART receive interrupt. Both are
+         * vectored through the CTC in IM2; the UART interrupt sets a pending flag
+         * which this loop turns into a process wake in ordinary kernel context.
+         * Neither interrupt preempts a running userspace process.
+         *
+         * muzix_proc_table_should_idle() refuses to say yes unless something is parked
+         * AND nothing is runnable, so the pre-boot state and the after-exit state both
+         * return instead of stopping.  See its comment for why that distinction is the
+         * difference between idling and hanging.
+         *
+         * This runs with the kernel map installed - it is reached from kernel_main's
+         * loop, never from the interrupt handler, which may address only windows 0 and
+         * 3 while this module is entirely inside window 1. */
+        if (muzix_proc_table_should_idle(&loop->system.startup.proc_table)) {
+            kernel_halt();
+            kernel_wake_console_readers(&loop->system.startup.proc_table);
+            muzix_load_idle_sample(&loop->system.startup.proc_table);
+        } else if (!muzix_proc_table_any_parked(&loop->system.startup.proc_table)) {
+            /* should_idle() said there was work, and nothing is parked - so nothing can
+             * become runnable either, because a deadline needs a park to expire.  That is
+             * the state the machine is in once the last process has exited, and it is a
+             * spin unless it is treated as the idleness it is: halt, and the tick
+             * returns 120 times a second to ask again.
+             *
+             * Same reasoning, and the same cost, as the halt in
+             * muzix_kernel_switchout() for the same state.  Both existed because
+             * should_idle() is a scheduler's question - "is there work, or may I rest"
+             * - and this is a different one, which is why it needed a second test
+             * rather than a change to the first. */
+            kernel_halt();
+            kernel_wake_console_readers(&loop->system.startup.proc_table);
+            muzix_load_idle_sample(&loop->system.startup.proc_table);
         }
-    }
 
-    switch (loop->state) {
-    case MUZIX_KERNEL_LOOP_IDLE:
-        muzix_system_entry_start(&loop->system);
-        loop->current_pid = muzix_system_entry_current_pid(&loop->system);
-        if (loop->current_pid >= 0 &&
-            loop->system.startup.proc_table.current >= 0) {
-            muzix_proc_slot_t *current_slot =
-                &loop->system.startup.proc_table.slots[
-                    loop->system.startup.proc_table.current];
-            uint16_t ep = current_slot->entry_point;
-            if (current_slot->entry_point != 0) {
-;
-                loop->state = MUZIX_KERNEL_LOOP_RUNNING;
-                muzix_userspace_entry = current_slot->entry_point;
-                muzix_userspace_banks[0] = current_slot->map.pages[0];
-                muzix_userspace_banks[1] = current_slot->map.pages[1];
-                muzix_userspace_banks[2] = current_slot->map.pages[2];
-                muzix_userspace_banks[3] = current_slot->map.pages[3];
-                muzix_zeta_enter_userspace();
-                loop->state = MUZIX_KERNEL_LOOP_IDLE;
-                loop->current_pid = -1;
-                return;
+        switch (loop->state) {
+        case MUZIX_KERNEL_LOOP_IDLE:
+            muzix_system_entry_start(&loop->system);
+            loop->current_pid = muzix_system_entry_current_pid(&loop->system);
+            if (loop->current_pid >= 0 &&
+                loop->system.startup.proc_table.current >= 0) {
+                muzix_proc_slot_t *current_slot =
+                    &loop->system.startup.proc_table.slots[
+                        loop->system.startup.proc_table.current];
+                uint16_t ep = current_slot->entry_point;
+                if (current_slot->entry_point != 0) {
+                    
+loop->state = MUZIX_KERNEL_LOOP_RUNNING;
+                    if (current_slot->resume_valid) {
+                        /* Resume at saved point (was parked in syscall) */
+                        muzix_resume_pc = current_slot->resume_pc;
+                        muzix_resume_sp = current_slot->resume_sp;
+                        muzix_resume_ret = current_slot->resume_ret;
+                        muzix_resume_banks[0] = current_slot->map.pages[0];
+                        muzix_resume_banks[1] = current_slot->map.pages[1];
+                        muzix_resume_banks[2] = current_slot->map.pages[2];
+                        muzix_resume_banks[3] = current_slot->map.pages[3];
+                        muzix_zeta_resume_from();
+                    } else {
+                        /* Fresh entry at entry_point */
+                        muzix_set_entry_point(current_slot->entry_point);
+                        muzix_userspace_banks[0] = current_slot->map.pages[0];
+                        muzix_userspace_banks[1] = current_slot->map.pages[1];
+                        muzix_userspace_banks[2] = current_slot->map.pages[2];
+                        muzix_userspace_banks[3] = current_slot->map.pages[3];
+                        muzix_zeta_enter_userspace();
+                    }
+                    
+                    /* muzix_zeta_enter_userspace never returns.
+                     * If we somehow reach here, reset state and continue loop. */
+                    loop->state = MUZIX_KERNEL_LOOP_IDLE;
+                    loop->current_pid = -1;
+                    continue;
+                }
+                /* entry_point == 0: slot not ready to run. Unpick it and retry. */
+                loop->system.startup.proc_table.current = -1;
             }
-        }
-        if (loop->current_pid < 0) {
             loop->state = MUZIX_KERNEL_LOOP_IDLE;
-        } else {
-            loop->state = MUZIX_KERNEL_LOOP_RUNNING;
-        }
-        break;
+            break;
     case MUZIX_KERNEL_LOOP_RUNNING:
+        /* The console check is not only for halt returns.
+         *
+         * Measured 2026-10-15: a byte written to a parked prompt took 3.4 s
+         * wall to be read, and every millisecond of it was the pump - a byte
+         * enters the emulator's receive buffer only when the guest reads the
+         * LSR, and the only LSR read the kernel makes is the one inside
+         * kernel_wake_console_readers().  That used to run at halt returns
+         * only, and during that window the loop was not halting: the shell's
+         * park deadline had not expired and the FS was cycling through its own
+         * wake, so the check never ran and the keystroke waited out the
+         * 240-tick park.  Asking here as well costs one IN per loop pass and
+         * made the same keystroke read in 7.6 ms instead of 3.4 s. */
+        kernel_wake_console_readers(&loop->system.startup.proc_table);
         loop->tick++;
         if (loop->system.startup.proc_table.current >= 0 &&
             muzix_proc_table_deliver_pending(
@@ -379,6 +612,7 @@ void muzix_kernel_loop_run(muzix_kernel_loop_t *loop)
     default:
         break;
     }
+    }  /* for(;;) - permanent idle loop */
 }
 
 /* Yield to the next ready process.
@@ -403,7 +637,7 @@ void muzix_kernel_loop_run(muzix_kernel_loop_t *loop)
  * continue. This is the same mechanism the IDLE path in muzix_kernel_loop_run()
  * already uses for the very first entry into userspace.
  *
- * muzix_userspace_entry and muzix_userspace_banks[] are in _DATA (window 3) and
+ * g_enter_entry_asm and muzix_userspace_banks[] are in _DATA (window 3) and
  * must be written BEFORE the handoff: after the map change window 3 is still
  * kernel only because pages[3] is 0x23, and the entry point is stashed into a
  * window-0 cell inside the handoff for the same reason. */
@@ -426,7 +660,7 @@ void muzix_kernel_loop_yield(muzix_kernel_loop_t *loop)
 
         /* Hand off to window 0. Never returns, so nothing after this point in
          * the kernel runs until the process next traps. See the note above. */
-        if (!next->active || next->entry_point == 0) {
+        if (!next->active || (next->entry_point == 0 && !next->resume_valid)) {
             /* Nothing runnable to hand to. Stay in the kernel rather than jump
              * to address 0 and die in the boot stub. */
             loop->system.startup.proc_table.current = -1;
@@ -434,12 +668,25 @@ void muzix_kernel_loop_yield(muzix_kernel_loop_t *loop)
         }
 
         loop->state = MUZIX_KERNEL_LOOP_RUNNING;
-        muzix_userspace_entry = next->entry_point;
-        muzix_userspace_banks[0] = next->map.pages[0];
-        muzix_userspace_banks[1] = next->map.pages[1];
-        muzix_userspace_banks[2] = next->map.pages[2];
-        muzix_userspace_banks[3] = next->map.pages[3];
-        muzix_zeta_enter_userspace();
+        if (next->resume_valid) {
+            /* Resume at saved point (was parked in syscall) */
+            muzix_resume_pc = next->resume_pc;
+            muzix_resume_sp = next->resume_sp;
+            muzix_resume_ret = next->resume_ret;
+            muzix_resume_banks[0] = next->map.pages[0];
+            muzix_resume_banks[1] = next->map.pages[1];
+            muzix_resume_banks[2] = next->map.pages[2];
+            muzix_resume_banks[3] = next->map.pages[3];
+            muzix_zeta_resume_from();
+        } else {
+            /* Fresh entry at entry_point */
+            muzix_set_entry_point(next->entry_point);
+            muzix_userspace_banks[0] = next->map.pages[0];
+            muzix_userspace_banks[1] = next->map.pages[1];
+            muzix_userspace_banks[2] = next->map.pages[2];
+            muzix_userspace_banks[3] = next->map.pages[3];
+            muzix_zeta_enter_userspace();
+        }
     }
 
     loop->tick++;

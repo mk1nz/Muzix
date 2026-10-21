@@ -3,10 +3,19 @@
 #include "z80_io.h"
 #include "context_switch.h"
 #include "trace.h"
+#include "bitmap_ops.h"
 
 #include <string.h>
 
-static uint32_t g_used_pages;
+/* The page bitmap, and it is bytes rather than the uint32_t it used to be.
+ *
+ * The 32-bit mask read better in C and cost ten times as much on the Z80:
+ * `(g_used_pages & ((uint32_t)1u << index))` made SDCC shift a 32-bit one by
+ * a variable amount on every one of the 32 steps, and the whole scan measured
+ * ~3.5k T-states against ~470T for the assembly walk in bitmap_ops.s - see
+ * that file's header for the numbers.  Four bytes are also the same memory.
+ */
+static uint8_t g_used_pages[(ZETA_RAM_PAGES + 7u) / 8u];
 
 /* REMOVED 2026-10-02: the six staging words below.
  *
@@ -20,8 +29,11 @@ static uint32_t g_used_pages;
 
 static void zeta_memory_mark(uint8_t page)
 {
+    uint16_t index;
+
     if (page >= ZETA_RAM_PAGE_FIRST && page <= ZETA_RAM_PAGE_LAST) {
-        g_used_pages |= (uint32_t)1u << (page - ZETA_RAM_PAGE_FIRST);
+        index = (uint16_t)(page - ZETA_RAM_PAGE_FIRST);
+        g_used_pages[index >> 3] |= (uint8_t)(1u << (index & 0x07u));
     }
 }
 
@@ -29,7 +41,7 @@ void zeta_memory_init(const process_map_t *kernel_map)
 {
     uint8_t region;
 
-    g_used_pages = 0;
+    memset(g_used_pages, 0, sizeof(g_used_pages));
     if (!kernel_map) {
         return;
     }
@@ -42,25 +54,27 @@ void zeta_memory_init(const process_map_t *kernel_map)
 
 int zeta_memory_alloc_page(uint8_t *page)
 {
-    uint8_t index;
+    int16_t index;
 
     if (!page) {
         return -1;
     }
-    for (index = 0; index < ZETA_RAM_PAGES; index++) {
-        if ((g_used_pages & ((uint32_t)1u << index)) == 0) {
-            g_used_pages |= (uint32_t)1u << index;
-            *page = (uint8_t)(ZETA_RAM_PAGE_FIRST + index);
-            return 0;
-        }
+    /* One call: scan, set and report.  bitmap_ops.s holds the walk; the
+     * 32-bit mask loop this replaces is measured at ~3.5k T-states against
+     * ~470T over the same four bytes. */
+    index = muzix_bitmap_alloc(g_used_pages, (uint16_t)sizeof(g_used_pages));
+    if (index < 0) {
+        return -1;
     }
-    return -1;
+    *page = (uint8_t)(ZETA_RAM_PAGE_FIRST + index);
+    return 0;
 }
 
 void zeta_memory_release_page(uint8_t page)
 {
     if (page >= ZETA_RAM_PAGE_FIRST && page <= ZETA_RAM_PAGE_LAST) {
-        g_used_pages &= ~((uint32_t)1u << (page - ZETA_RAM_PAGE_FIRST));
+        muzix_bitmap_release(g_used_pages,
+                             (uint16_t)(page - ZETA_RAM_PAGE_FIRST));
     }
 }
 

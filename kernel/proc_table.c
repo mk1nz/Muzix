@@ -141,8 +141,9 @@ void muzix_proc_table_register(muzix_kernel_proc_table_t *table,
          * after boot with a zero stamp would be charged all N of them by the
          * first muzix_proc_table_charge() - time the process did not exist for,
          * appearing as a UTIME it had not earned before running a single
-         * instruction. */
-        muzix_tick_stamp_store(&p->tick_stamp);
+         * instruction.  The accounting mark is charge_stamp - tick_stamp is the
+         * park deadline and this is not it. */
+        muzix_tick_stamp_store(&p->charge_stamp);
         p->next_ready = -1;
         p->mproc = *mp;
         p->map = *map;
@@ -218,19 +219,61 @@ void muzix_proc_set_accounted(muzix_proc_slot_t *slot)
  * the accumulator ends up holding executed time and nothing else - which is what
  * makes the busy fraction mean what it says.
  *
- * Safe with no system call in flight: it returns rather than stamping nothing, so
- * an early boot halt cannot corrupt a slot that is not being charged. */
+ * WHO CALLS IT, AND WHAT THE STALE POINTER COSTS
+ * ----------------------------------------------
+ * kernel_halt() in kernel/kernel_loop.c, on every idle halt - the scheduler's
+ * own stop.  That is the call this mechanism was designed for and never had: the
+ * halt that ends a park is taken with a system call in flight, so the interval
+ * the process is about to be charged for ends inside a HALT.
+ *
+ * g_accounted is a pointer to the slot of the process that made the LAST system
+ * call, and it is not cleared when that call ends or when the process exits - so
+ * on an idle halt it can name a slot that is not the one that was running.  The
+ * consequence is bounded and it is worth stating rather than waving at:
+ *
+ *   - an inactive slot: the stamp is written to a slot nothing charges, and the
+ *     slot is re-stamped by muzix_proc_table_register() or fork() before it can
+ *     run, so the write is invisible.
+ *   - a parked slot: exactly right.  The processor was stopped, so the parked
+ *     interval must not be charged to whoever wakes.
+ *   - an active slot sitting in a ready queue it cannot be dispatched from (no
+ *     map, or no entry point): its next charge starts from the halt and the
+ *     interval before it is lost.  A few ticks of UTIME on a process that
+ *     cannot run, on a machine that is already in that state.
+ *
+ * Nothing here touches a bank register and nothing here runs in interrupt
+ * context: muzix_tick_stamp_store() reads the tick counter and stores two bytes
+ * into the table, and the halt itself is the same z80_idle_halt() the scheduler
+ * has always taken.
+ *
+ * Safe with no system call in flight: it halts either way and stamps only when
+ * there is a slot to stamp, so an early boot halt cannot corrupt a slot that is
+ * not being charged. */
 void muzix_proc_halt_uncounted(void)
 {
-    if (g_accounted != 0) {
-        muzix_tick_stamp_store(&g_accounted->tick_stamp);
-    }
-    /* Enable interrupts in the same assembly sequence as HALT so no tick can be
-     * consumed in the gap between separate calls. */
+    /* THE STOP, AND NOTHING ELSE.
+     *
+     * This used to stamp g_accounted->tick_stamp before and after the halt, to
+     * keep the halted interval out of that process's next charge.  tick_stamp
+     * carries TWO meanings: it is the charge mark muzix_tick_add_process_time()
+     * reads at syscall entry, and it is the park deadline park() writes and
+     * wake_expired() tests (see the note at park()).  At an idle halt the
+     * accounted process is exactly the one that just parked, so the "charge
+     * mark" write overwrote a 0xFFFF infinite deadline with `now` - and
+     * wake_expired() then requeued that slot on the very next scheduler pass,
+     * every pass, for ever.  Measured on 2026-10-14: ~3600 map installs per
+     * 40M cycles against ~110 traps, shell and fs_server round-robinned at
+     * full tilt, "Halted: 3%" at an idle prompt, loadavg pinned at 1.00.
+     *
+     * The charge wart this leaves behind - idle time billed to the last
+     * process as system time - is what the tree did before the mechanism was
+     * wired: cosmetic, and worth less than a deadline that survives the halt.
+     * A separate charge field is the real fix and is a struct change with
+     * every offset after it in play.
+     *
+     * Enable interrupts in the same assembly sequence as HALT so no tick can
+     * be consumed in the gap between separate calls. */
     z80_idle_halt();
-    if (g_accounted != 0) {
-        muzix_tick_stamp_store(&g_accounted->tick_stamp);
-    }
 }
 
 int muzix_proc_table_should_idle(muzix_kernel_proc_table_t *table)
@@ -371,7 +414,20 @@ void muzix_proc_table_park(muzix_kernel_proc_table_t *table, int slot,
         }
     }
     p->p_flags |= MUZIX_PROC_WAIT_TICK;
-    p->tick_stamp = (uint16_t)(muzix_tick_now() + ticks);
+    /* 0xFFFF is the tree's spelling of "no deadline", which is what both call
+     * sites that park with it mean ("Infinite timeout - woken by IPC",
+     * kernel/syscalls_ipc.c).  Computing it as now + 0xFFFF produces now - 1,
+     * and muzix_tick_expired()'s wrap-safe test reads that as one tick PAST
+     * its deadline: measured, every one of those parks was re-readied by
+     * muzix_proc_table_wake_expired() on the very next scheduler pass - 957
+     * deadline wakes for 957 parks, not one of them real - so a parked server
+     * resumed with resume_ret == 0 and no message in hand, and the machine
+     * round-robinned through ready slots instead of waiting for work.
+     * 0xFFFF is the tree's spelling of "no deadline", and both wake paths treat it
+     * as exactly that - wake_expired() skips it below - so park() has to be able
+     * to produce the value they test for. */
+    p->tick_stamp = (ticks == 0xFFFFu) ? (uint16_t)0xFFFFu
+                                       : (uint16_t)(muzix_tick_now() + ticks);
     muzix_proc_table_unlink(table, slot);
     /* Parking is done by the running process, so this is usually the current
      * slot.  Clearing it stops the loop from treating "current" as runnable on
@@ -438,11 +494,17 @@ int muzix_proc_table_wake_expired(muzix_kernel_proc_table_t *table)
         if (!p->active || (p->p_flags & MUZIX_PROC_WAIT_TICK) == 0u) {
             continue;
         }
+        /* The sentinel deadline is not a deadline.  An "infinite" park used to be
+         * expired as soon as it was taken, because this loop did not test for the
+         * sentinel while the code that produced it already did. */
+        if (p->tick_stamp == 0xFFFFu) {
+            continue;
+        }
         if (!muzix_tick_expired(p->tick_stamp)) {
             continue;
         }
         p->p_flags &= (uint8_t)~MUZIX_PROC_WAIT_TICK;
-        muzix_tick_stamp_store(&p->tick_stamp);
+        muzix_tick_stamp_store(&p->charge_stamp);
         muzix_proc_table_ready(table, slot);
         woke++;
     }
@@ -498,7 +560,7 @@ int muzix_proc_table_wake_input(muzix_kernel_proc_table_t *table)
             continue;
         }
         p->p_flags &= (uint8_t)~MUZIX_PROC_WAIT_TICK;
-        muzix_tick_stamp_store(&p->tick_stamp);
+        muzix_tick_stamp_store(&p->charge_stamp);
         muzix_proc_table_ready(table, slot);
         woke++;
     }
@@ -521,6 +583,19 @@ void muzix_proc_table_ready(muzix_kernel_proc_table_t *table, int slot)
         return;
     }
 
+    /* A slot that is about to enter the ready queue is not waiting for a tick,
+     * and leaving the flag set is not cosmetic: park() refuses to park a slot
+     * that already has MUZIX_PROC_WAIT_TICK (the guard at the top of that
+     * function), so a process that is readied without clearing the flag can
+     * never park again.  Measured: readline()'s first read parks the shell and
+     * the reply arrives through muzix_syscalls_deliver_parked(), which readies
+     * the slot but does not clear the flag - so the shell's wait() after a
+     * fork parks not at all, returns at once, and readline()'s retry
+     * sys_park(240) is a no-op too, which is a spin: the shell sits at 97% CPU
+     * asking the FS for a byte over and over, and the second prompt never
+     * appears because the loop that would print it never blocks. */
+    table->slots[slot].p_flags &= (uint8_t)~MUZIX_PROC_WAIT_TICK;
+
     q = table->slots[slot].ready_q;
     if (q < 0 || q >= MUZIX_PROC_NQ) {
         q = MUZIX_PROC_USER_Q;
@@ -540,9 +615,6 @@ int muzix_proc_table_fork(muzix_kernel_proc_table_t *table,
                           uint8_t child_pid)
 {
     int slot;
-
-    ;;
-    ;;
 
     if (!table) {
         return -1;
@@ -575,6 +647,11 @@ int muzix_proc_table_fork(muzix_kernel_proc_table_t *table,
     table->slots[child_slot].pid = child_pid;
     table->slots[child_slot].mproc.mp_pid = child_pid;
     table->slots[child_slot].p_flags = MUZIX_PROC_NO_MAP;
+    /* Clear the map - child should get a fresh user map, not inherit parent's */
+    table->slots[child_slot].map.pages[0] = 0;
+    table->slots[child_slot].map.pages[1] = 0;
+    table->slots[child_slot].map.pages[2] = 0;
+    table->slots[child_slot].map.pages[3] = 0;
     table->slots[child_slot].parent_pid = table->slots[parent_slot].pid;
     table->slots[child_slot].exit_status = 0;
     table->slots[child_slot].exited = 0;
@@ -588,7 +665,7 @@ int muzix_proc_table_fork(muzix_kernel_proc_table_t *table,
      * been running for no time at all, and it starts counting from here.  The
      * slot was copied verbatim above, so without this the child would inherit
      * the parent's stamp and be charged for the parent's accumulated age. */
-    muzix_tick_stamp_store(&table->slots[child_slot].tick_stamp);
+    muzix_tick_stamp_store(&table->slots[child_slot].charge_stamp);
     table->slots[child_slot].next_ready = -1;
     /* The whole slot was copied verbatim above, which includes the parent's
      * owned_pages. The child runs on the parent's map until it execs, so it
@@ -833,6 +910,112 @@ int muzix_proc_table_deliver_pending(muzix_kernel_proc_table_t *table,
                                         (uint8_t)(128u + signal));
 }
 
+/* Whether a slot that is queued for dispatch can actually be dispatched.
+ *
+ * The three conditions are the ones the pick loops have always tested, named
+ * once here instead of three times: a slot that has exited, a slot with no map
+ * yet (a forked child before its exec), and a slot with no entry point
+ * (registered but never given an image).  Any of the three means the queue
+ * entry describes a process the scheduler cannot run. */
+static int muzix_proc_slot_runnable(const muzix_proc_slot_t *p)
+{
+    if (!p) {
+        return 0;
+    }
+    return p->active &&
+           (p->p_flags & MUZIX_PROC_NO_MAP) == 0 &&
+           p->entry_point != 0;
+}
+
+/* Take the first RUNNABLE slot out of queue `q`, leaving everything else in it.
+ *
+ * SKIP AND KEEP, NOT UNLINK AND DROP
+ * ----------------------------------
+ * The version before this popped the head of each queue and threw the entry
+ * away when it was not runnable.  Dropping is not idempotent, and that is the
+ * whole defect: a slot that is merely not-YET-runnable - a forked child that
+ * has not exec'd, a slot whose image has not been loaded - is unlinked from the
+ * ready queue and linked into nothing, so it is lost for good.  Nothing will
+ * ever re-queue it, because muzix_proc_table_ready() is what queues a slot and
+ * nothing has a reason to call it again: the process sits in the table, active,
+ * unreachable, and the machine runs with one process fewer than it has.
+ *
+ * So instead, everything AHEAD of the first runnable entry is moved to the tail
+ * and that entry is returned.  The queue keeps its round-robin order with one
+ * slot removed, which is what a healthy scheduler does - a queue of [invalid, A,
+ * B] becomes [A, B, invalid] and returns A, so nothing is skipped twice and
+ * nothing is lost.
+ *
+ * WHY THERE ARE TWO PASSES
+ * ------------------------
+ * The walk below has to move an entry to get past it, so a queue whose entries
+ * are ALL unrunnable would come back rotated one place rather than unchanged.
+ * The read-only first pass exists to make that case a genuine no-op: nothing
+ * runnable found, nothing touched.  It costs at most MUZIX_PROC_TABLE_MAX link
+ * reads and one shot through the runnable test, which is the same work the walk
+ * itself would have done before it could have answered - so it is a
+ * clarification of the answer rather than extra work, and it is what lets the
+ * walk itself drop the "have I come all the way round?" bookkeeping entirely:
+ * the slot it is heading for is already known to exist. */
+static int muzix_proc_table_take(muzix_kernel_proc_table_t *table, int q)
+{
+    int head;
+    int found = -1;
+    int slot;
+
+    if (!table || q < 0 || q >= MUZIX_PROC_NQ) {
+        return -1;
+    }
+    head = table->ready_head[q];
+    if (head < 0 || head >= MUZIX_PROC_TABLE_MAX) {
+        return -1;
+    }
+    /* A read-only first pass, BOUNDED at MUZIX_PROC_TABLE_MAX steps.  It is what
+     * makes the "nothing runnable" case a genuine no-op: the walk below has to
+     * move an entry to get past an unrunnable one, and a queue of only unrunnable
+     * entries would otherwise come back rotated one place.
+     *
+     * The bound is not belt and braces, it is the invariant this function has
+     * always been required to hold - kernel/test_proc_table.c states it and the
+     * old code satisfied it incidentally, by writing -1 into every slot as it
+     * popped, so a revisited slot handed back -1 the second time and the walk
+     * finished.  A read-only walk gets that for nothing, so it needs the bound
+     * given: a queue can hold at most MUZIX_PROC_TABLE_MAX distinct slots, so a
+     * walk that is longer than that is revisiting and is a corrupt chain, not a
+     * queue.  Refusing to look further is the same answer -1, and the queue is
+     * left exactly as it was. */
+    {
+        int steps;
+
+        for (slot = head, steps = 0;
+             slot >= 0 && slot < MUZIX_PROC_TABLE_MAX && steps < MUZIX_PROC_TABLE_MAX;
+             slot = table->slots[slot].next_ready, steps++) {
+            if (muzix_proc_slot_runnable(&table->slots[slot])) {
+                found = slot;
+                break;
+            }
+        }
+    }
+    if (found < 0) {
+        return -1;                  /* nothing runnable: the queue is untouched */
+    }
+    for (;;) {
+        slot = table->ready_head[q];
+        if (slot < 0 || slot >= MUZIX_PROC_TABLE_MAX) {
+            return -1;              /* malformed chain; leave it alone */
+        }
+        table->ready_head[q] = table->slots[slot].next_ready;
+        table->slots[slot].next_ready = -1;
+        if (table->ready_head[q] == -1) {
+            table->ready_tail[q] = -1;
+        }
+        if (slot == found) {
+            return slot;
+        }
+        muzix_proc_enqueue(table, slot, q);
+    }
+}
+
 int muzix_proc_table_pick_next(muzix_kernel_proc_table_t *table)
 {
     int q;
@@ -842,66 +1025,15 @@ int muzix_proc_table_pick_next(muzix_kernel_proc_table_t *table)
         return -1;
     }
 
-    q = MUZIX_PROC_TASK_Q;
-    while (table->ready_head[q] != -1) {
-        slot = table->ready_head[q];
-        table->ready_head[q] = table->slots[slot].next_ready;
-        table->slots[slot].next_ready = -1;
-        if (table->ready_head[q] == -1) {
-            table->ready_tail[q] = -1;
-        }
-        if (table->slots[slot].active &&
-            (table->slots[slot].p_flags & MUZIX_PROC_NO_MAP) == 0) {
+    /* Priority order, top queue first, and the first queue that can produce a
+     * slot wins.  muzix_proc_table_take() answers -1 for a queue that is empty
+     * or holds nothing runnable, having left that queue exactly as it found it,
+     * so falling through to the next priority is safe in both cases. */
+    for (q = MUZIX_PROC_TASK_Q; q < MUZIX_PROC_NQ; q++) {
+        slot = muzix_proc_table_take(table, q);
+        if (slot >= 0) {
             break;
         }
-        slot = -1;
-    }
-    if (slot == -1 && table->ready_head[q] == -1) {
-        q = MUZIX_PROC_SERVER_Q;
-    }
-    /* `slot == -1 &&` on the two loops below, and it is the whole fix.
-     *
-     * `q` is advanced only when the queue ran dry, so when a loop SUCCEEDS with
-     * entries still behind it, q still names the queue it just took from - and the
-     * next loop, which was written to be "the next priority down", popped from
-     * that same queue again.  It overwrote `slot` with a second process and left
-     * the first one unlinked and in no queue at all: lost, neither returned nor
-     * re-queued.
-     *
-     * With one process ready this is invisible.  With two distinct processes in
-     * one queue the first pick returns the second and the next pick returns -1,
-     * having found nothing while a ready process existed - which is exactly what
-     * kernel/test_proc_table.c now asserts, and what made a shell and a daemon
-     * unable to coexist: the daemon was dropped from the queue on every attempt
-     * instead of being run. */
-    while (slot == -1 && table->ready_head[q] != -1) {
-        slot = table->ready_head[q];
-        table->ready_head[q] = table->slots[slot].next_ready;
-        table->slots[slot].next_ready = -1;
-        if (table->ready_head[q] == -1) {
-            table->ready_tail[q] = -1;
-        }
-        if (table->slots[slot].active &&
-            (table->slots[slot].p_flags & MUZIX_PROC_NO_MAP) == 0) {
-            break;
-        }
-        slot = -1;
-    }
-    if (slot == -1 && table->ready_head[q] == -1) {
-        q = MUZIX_PROC_USER_Q;
-    }
-    while (slot == -1 && table->ready_head[q] != -1) {
-        slot = table->ready_head[q];
-        table->ready_head[q] = table->slots[slot].next_ready;
-        table->slots[slot].next_ready = -1;
-        if (table->ready_head[q] == -1) {
-            table->ready_tail[q] = -1;
-        }
-        if (table->slots[slot].active &&
-            (table->slots[slot].p_flags & MUZIX_PROC_NO_MAP) == 0) {
-            break;
-        }
-        slot = -1;
     }
     if (slot == -1) {
         table->current = -1;
@@ -994,6 +1126,8 @@ void muzix_proc_table_charge(muzix_proc_slot_t *process, uint8_t kernel_time)
     if (!process) {
         return;
     }
+    /* See muzix_proc_slot_t::charge_stamp: the accounting mark is its own
+     * field, so a charge can never re-stamp a parked slot's deadline. */
 
     /* Which of the two, and the two are adjacent uint32_t fields at fixed
      * offsets, so this is two address arithmetic sequences and no branch in the
@@ -1001,8 +1135,8 @@ void muzix_proc_table_charge(muzix_proc_slot_t *process, uint8_t kernel_time)
      * assembly free of struct offsets, which is the thing that would silently
      * break if the struct ever gained a field ahead of them. */
     if (kernel_time) {
-        muzix_tick_add_process_time(&process->sys_time, &process->tick_stamp);
+        muzix_tick_add_process_time(&process->sys_time, &process->charge_stamp);
     } else {
-        muzix_tick_add_process_time(&process->user_time, &process->tick_stamp);
+        muzix_tick_add_process_time(&process->user_time, &process->charge_stamp);
     }
 }

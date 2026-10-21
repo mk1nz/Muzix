@@ -53,12 +53,11 @@
  * ----------------------------------
  * All three have cost this program its only output before it printed any:
  *
- *   - `/` and `%` compile to __divuint and __moduint, which no module in any
- *     userspace link provides.  The call goes to address 0, which on this
- *     platform is the ROM boot stub, and the program runs the stub's `ldir` and
- *     jumps back into kernel_main.  The symptom is a program that prints
- *     NOTHING, which reads as a hang rather than a link error.  Written down in
- *     lib/libc.c.
+ *   - `/` and `%` compile to __divuint and __moduint.  They DO resolve -
+ *     lib/math.s defines them and every app map file lists them - but they
+ *     used to return the result in HL while the compiled caller reads DE, so
+ *     a division through them was a silent wrong answer.  The practice of
+ *     avoiding them stands on that, not on a missing definition.
  *   - a 32-bit multiply is __mullong, which resolves and is enormous;
  *   - a 32-bit shift by a VARIABLE count is a third route to __mullong.
  *
@@ -83,15 +82,36 @@
  * `spent` is clamped to `capacity` by the caller, so the quotient is at most
  * Q14 and the loop runs at most 16384 times - and the interval is a boot, not a
  * frame, so it runs exactly once.
+ *
+ * BOTH OPERANDS ARE SHIFTED DOWN FIRST, and this is a fix rather than a
+ * refinement.  `spent << 14` loses its top bits once spent reaches 2^18 -
+ * 262144 ticks, about thirty-six minutes of process-busy time - and after that
+ * the answer is silently wrong, most visibly as 0.00 from a machine that has
+ * plainly been working.  Both are halved together until capacity is under 2^18,
+ * which restores room for the shift: the product then fits in 32 bits, because
+ * spent <= capacity < 2^18.
+ *
+ * The precision lost that way is not visible at two decimals.  If k bits are
+ * dropped, the shifted ratio differs from spent/capacity by under
+ * 2^k/capacity_orig, and the loop stops as soon as capacity < 2^18, which
+ * forces capacity_orig above 2^(17+k) - a relative error under 2^-17 (about
+ * 0.0008%), and under 0.008 Q14 units against a quantum of 6.1e-5 of a unit.
+ * A halving by literal 1 is a carry chain across the four bytes, not a call
+ * out and not a __mullong route.
  */
 static uint32_t busy_fraction(uint32_t spent, uint32_t capacity)
 {
-    uint32_t scaled = spent << 14;
+    uint32_t scaled;
     uint32_t whole = 0;
 
     if (capacity == 0) {
         return 0;
     }
+    while (capacity >= 262144u) {    /* 2^18: spend this many bits on room */
+        capacity >>= 1;
+        spent >>= 1;
+    }
+    scaled = spent << 14;
     while (scaled >= capacity) {
         scaled -= capacity;
         whole++;

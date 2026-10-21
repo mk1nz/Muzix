@@ -109,7 +109,10 @@ static void print_help(const char* program)
     printf("      --strict-zeta  Enforce strict ZETA SBC V2 behavior\n");
     printf("      --compat-hacks Enable legacy compatibility shortcuts\n");
     printf("  -v, --verbose      Enable verbose debug output\n");
-    printf("  -w, --watch ADDR   Report machine state whenever PC reaches ADDR (hex)\n  --watchw ADDR      Report every store to ADDR with its PC\n  --trace N          Print the last N program counters on exit\n");
+    printf("  -t, --kernel-trace Enable kernel trace output (Muzix)\n");
+    printf("  -w, --watch ADDR   Report machine state whenever PC reaches ADDR (hex)\n");
+    printf("  --watchw ADDR      Report every store to ADDR with its PC\n");
+    printf("  --trace N          Print the last N program counters on exit\n");
     printf("  -h, --help         Show this help message\n");
     printf("  --version          Show version information\n");
     printf("\n");
@@ -117,6 +120,7 @@ static void print_help(const char* program)
     printf("  %s ZETA2_std.rom               # Run RomWBW\n", program);
     printf("  %s -s fuzix -d fuzix.img       # Run FUZIX\n", program);
     printf("  %s -s muzix rom.bin -r -i      # Run Muzix with stdin input\n", program);
+    printf("  %s -s muzix rom.bin -r -i -t   # Run Muzix with kernel trace\n", program);
     printf("  %s -d disk.img -c 1000000      # Run with disk, 1M cycles\n", program);
     printf("\n");
     printf("Port Usage (z80pack style):\n");
@@ -241,6 +245,7 @@ int main(int argc, char* argv[])
     bool verbose = false;
     bool enable_stdin = false;
     bool strict_zeta = true;
+    bool kernel_trace = false;
     uint16_t watch_addr = 0xFFFFu;
     bool have_watch = false;
     uint16_t watchw_addr = 0xFFFFu;
@@ -250,24 +255,25 @@ int main(int argc, char* argv[])
     
     /* Command-line options */
     static struct option long_options[] = {
-        {"system",   required_argument,  NULL, 's'},
-        {"disk",     required_argument,  NULL, 'd'},
-        {"run",      no_argument,        NULL, 'r'},
-        {"cycles",   required_argument,  NULL, 'c'},
-        {"stdin",    no_argument,        NULL, 'i'},
-        {"strict-zeta", no_argument,     NULL,  2},
-        {"compat-hacks", no_argument,    NULL,  3},
-        {"verbose",  no_argument,        NULL, 'v'},
-        {"watch",    required_argument,  NULL, 'w'},
-        {"watchw",   required_argument,  NULL, 4},
-        {"trace",    required_argument,  NULL, 5},
-        {"help",     no_argument,        NULL, 'h'},
-        {"version",  no_argument,        NULL,  1},
+        {"system",        required_argument,  NULL, 's'},
+        {"disk",          required_argument,  NULL, 'd'},
+        {"run",           no_argument,        NULL, 'r'},
+        {"cycles",        required_argument,  NULL, 'c'},
+        {"stdin",         no_argument,        NULL, 'i'},
+        {"strict-zeta",   no_argument,        NULL,  2},
+        {"compat-hacks",  no_argument,        NULL,  3},
+        {"verbose",       no_argument,        NULL, 'v'},
+        {"kernel-trace",  no_argument,        NULL, 't'},
+        {"watch",         required_argument,  NULL, 'w'},
+        {"watchw",        required_argument,  NULL, 4},
+        {"trace",         required_argument,  NULL, 5},
+        {"help",          no_argument,        NULL, 'h'},
+        {"version",       no_argument,        NULL,  1},
         {NULL, 0, NULL, 0}
     };
     
     int c;
-    while ((c = getopt_long(argc, argv, "s:d:rc:ivhw:45:", long_options, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "s:d:rc:ivthw:45:", long_options, NULL)) != -1) {
         switch (c) {
             case 's':
                 if (strcmp(optarg, "romwbw") == 0) {
@@ -302,6 +308,9 @@ int main(int argc, char* argv[])
                 
             case 'v':
                 verbose = true;
+                break;
+            case 't':
+                kernel_trace = true;
                 break;
             case 'w':
                 watch_addr = z80_addr(optarg);
@@ -366,6 +375,7 @@ int main(int argc, char* argv[])
     z80pack_set_system(g_emulator, system);
     z80pack_set_strict_zeta(g_emulator, strict_zeta);
     z80pack_set_verbose(g_emulator, verbose);
+    z80pack_set_kernel_trace(g_emulator, kernel_trace);
     if (have_watch) {
         z80pack_set_watch(g_emulator, watch_addr);
     }
@@ -393,9 +403,20 @@ int main(int argc, char* argv[])
         }
     }
     
+    /* Write kernel trace enable flag to emulator memory for kernel to read */
+    if (kernel_trace) {
+        z80pack_write_byte(g_emulator, 0xFF00, 1);
+    }
+    
     /* Reset emulator */
     printf("Resetting emulator...\n");
     z80pack_reset(g_emulator);
+    
+    /* Write kernel trace enable flag to emulator memory for kernel to read */
+    /* Use common memory area (0xFC00-0xFFFF) which is not banked */
+    if (kernel_trace) {
+        z80pack_write_byte(g_emulator, 0xFC00, 1);
+    }
     
     printf("\n");
     printf("Starting execution at PC=0x%04X\n", z80pack_get_pc(g_emulator));

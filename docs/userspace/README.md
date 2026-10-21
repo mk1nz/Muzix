@@ -24,10 +24,21 @@ not the ROM reset path; the image's reset stub is
 ## Runtime and interfaces
 
 `lib/` provides the userspace runtime, startup code, and wrappers for Muzix's
-custom syscall ABI, not MINIX's. File operations use the mounted ROM-backed
-filesystem, and terminal I/O uses the kernel TTY path. These interfaces are
-Muzix implementations and do not provide MINIX message-passing, device-task,
-or blocking-I/O semantics.
+custom syscall ABI. File operations on the ROM-backed filesystem
+are served by the kernel directly (via the ROM filesystem interceptors in
+`kernel/syscalls_ipc.c`), not routed to the FS server — the kernel owns the ROM
+block device and the MINIX-v1 on-disk walk. Console I/O (descriptors 0/1/2)
+is still handled by the FS server's TTY line discipline (`servers/fs/fs_server.c`).
+The syscall wrappers in `lib/user_syscall.s` trap through `CALL 0x0030` with a custom ABI.
+
+The entry contract every program is built against: `lib/crt0.s` loads `argv`
+into DE and `argc` into HL before calling `_main` (a plain C call, not stack
+arguments), the syscall wrappers in `lib/user_syscall.s` trap through
+`CALL 0x0030`, and `read()` in `lib/libc.c` blocks by parking — on
+`MUZIX_READ_AGAIN` (-11, `lib/tty_ioctl.h`) it calls `sys_park(240)`, two
+seconds at a time, and returns every other answer, errors included. The ROM
+image also carries the three boot servers `fs_server`, `mm_server` and
+`pm_server`, which `kernel/kernel_main.c` forks and execs before the shell.
 
 The scheduler is cooperative. Its 120 Hz CTC tick accounts for time and drives
 deadlines, but does not preempt a running userspace process. `time()` reads the

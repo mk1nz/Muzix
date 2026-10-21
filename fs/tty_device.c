@@ -1,13 +1,12 @@
 #include "tty_device.h"
 #include "../platform/zeta-v2/z80_io.h"
-#include "../kernel/proc_table.h"
 
-#include "../platform/zeta-v2/tick.h"
 #include "../platform/zeta-v2/uart_io.h"
 
 #include <string.h>
 
-/* The bounded wait, reached through a pointer rather than called directly.
+/* The device's send/recv/available calls, reached through the mirrored static
+ * pointers rather than through the struct's own fields or called directly.
  *
  * The reason is a measurement and it is worth stating precisely, because the
  * shape looks arbitrary.  Every other call in muzix_tty_read() goes through
@@ -18,72 +17,14 @@
  * struct pointer.  Measured on muzix_tty_read(), which is a thousand bytes
  * long and at a register-allocation cliff:
  *
- *     no bounded wait at all                            -8 bytes
- *     the wait inlined (SDCC inlines small statics)   +246 bytes
- *     the wait as a direct call                        +222 bytes
- *     the wait through a function pointer          (this number)
+ *     no call in the loop at all                          -8 bytes
+ *     the call inlined (SDCC inlines small statics)       +246 bytes
+ *     the call as a direct call                           +222 bytes
+ *     the call through a function pointer              (this number)
  *
  * So it is a pointer, and it stays a pointer.  "Just call it directly" is a
  * 222-byte change that shows up as a stack-headroom build failure saying
  * nothing about reads. */
-
-/* How long muzix_tty_read waits for input before giving up, in seconds.
- *
- * Both waits below used to be `while (!available()) continue;` with no exit
- * condition at all, and that is the whole of the "blocking I/O spin-waits and
- * monopolises CPU" limitation in AGENTS.md: a read with nothing to read never
- * returned, so the CPU was held until a key arrived.  A wait that cannot end
- * is not a wait - if the UART reports nothing, or a process reads a terminal
- * that has gone quiet, the machine is simply gone.
- *
- * Five seconds is long enough that a person at a serial console never sees it
- * and short enough that a genuinely dead line is reported rather than hung on.
- * It is measured on the 120 Hz CTC tick (platform/zeta-v2/tick.s), not on
- * iterations, so it is the same time base as every other deadline here and it
- * does not drift.
- *
- * WHAT A TIMEOUT RETURNS
- * ----------------------
- * -1, and *result = 0.  An error, not an end of file, because it is one: the
- * read did not fail to find end of file, it ran out of patience.  The two have
- * to be distinguishable, and a zero-length return is not enough of a
- * distinction to be worth having.
- *
- * It matters because of what a caller does with each.  Ctrl-D on this device is
- * a zero-length read, and every terminal in the tree treats that as "the line
- * is finished, the program should stop reading" - lib/libc.c's getchar() returns
- * -1, and shell/shell.c's readline() breaks out of the command loop and the
- * shell exits, and the init task starts a new one.  With a timeout reported the
- * same way, five seconds of an idle console looked exactly like somebody
- * pressing Ctrl-D: the machine printed its boot banner again, for ever, every
- * five seconds.  That is what the first version did, and the emulator caught it
- * in about ten seconds of idle.
- *
- * The distinction is the caller's to make, because only the caller knows which
- * it wants.  A console that wants to wait re-arms: kernel/shell.c's fallback
- * shell moves the deadline forward instead of giving up, and
- * shell/shell.c's readline() retries the read.  A program that genuinely wants
- * "give me what has arrived, or tell me nothing is coming" gets -1 and can say
- * so, which zero-length read could never let it do.
- *
- * Canonical mode on expiry does NOT hand back a half-typed line.  It used to,
- * on the grounds that a line with no newline is "complete enough to act on"
- * and that losing what someone typed because they paused is a worse defect
- * than the spin this replaced - and that first half is what broke the console.
- * Handing it back let the reader drain the buffer while the line was still
- * being edited, so every later Backspace or Ctrl-U found an empty buffer and
- * did nothing, silently.  Nothing is lost by withholding it: the bytes stay in
- * tty->input and the line is returned whole once the terminator arrives.  See
- * the branch in muzix_tty_collect_line() and commit f66f35d. */
-#define MUZIX_TTY_READ_SECONDS 5
-#define MUZIX_TTY_READ_TICKS (MUZIX_TICKS_PER_SECOND * MUZIX_TTY_READ_SECONDS)
-
-/* Backstop for the wait, in poll iterations, for the case where the tick does
- * not move at all.  Each iteration is one port read - tens of cycles - so
- * 1 048 576 is far longer than the 5 s the tick budget expresses at 120 Hz, and
- * it exists only so a dead counter cannot spin forever.  A power-of-two value
- * keeps the comparison to an increment and a mask. */
-#define MUZIX_TTY_READ_POLLS 0x00100000u
 
 /*
  * The callbacks are mirrored out of the device struct into these statics, and
@@ -283,116 +224,45 @@ void muzix_tty_device_set_callbacks(muzix_tty_device_t *tty,
     g_tty_userdata = userdata;
 }
 
-/* Wait for a byte, bounded.  Returns 1 when one is there, 0 on timeout.
+/* Is there a byte to read?  Returns 1 when there is, 0 when there is not.
  *
- * A function rather than a loop inside muzix_tty_read(), and with NO PARAMETER,
- * and both of those are measurements rather than taste.  SDCC 4.5 is at a
- * register-allocation cliff in muzix_tty_read() - a thousand-byte function with
- * a dozen struct fields in play - and anything that needs a register set up for
- * it tips the function over:
+ * NO WAIT, AND NO DEADLINE.  There used to be both: this spun on the port for
+ * five seconds with a tick-measured deadline and a poll-count backstop, and
+ * handed back whatever line had assembled by the time one of them fired.  That
+ * was the last place the processor spent real time with nothing to do, and it
+ * is why the busy fraction read 1.00 while the machine did nothing: the spin
+ * was the load.
  *
- *   * the deadline as a local, spilled with `ex (sp),hl` because it has to
- *     survive the call through the tty's function pointer:      +246 bytes
- *   * the wait as a helper taking a `uint16_t ticks`:          +228 bytes
- *   * both removed:                                              -8 bytes
+ * Blocking is not this function's job and never was, once there was a way to
+ * hand the processor back.  park() records where in the PROCESS to continue,
+ * the scheduler stops the CPU while nothing is runnable, and the process is
+ * resumed when its deadline arrives or a key does - which is FUZIX's psleep(),
+ * and the reason its plt_switchout can be followed by a bare `ret`.
  *
- * So the deadline lives here, in a small function with two locals where the
- * spill is contained, and the wait takes its budget from a constant rather than
- * from the caller.  The caller gains a bare `call` and nothing to set up.  The
- * kernel is 152 bytes above the stack headroom floor its own deepest measured
- * syscall chain sets, so which of these three shapes it gets is the difference
- * between building and not - and the measurement is recorded here because the
- * next person to "just pass the budget in as a parameter" will otherwise make
- * this function 228 bytes larger and the build will fail with a stack headroom
- * message that has nothing obviously to do with a read deadline.
+ * So the device answers with what it has, now, and lib/libc.c's read() decides
+ * what to do about nothing: it parks for two seconds and asks again.  The
+ * point to continue at belongs to the process, which is the whole reason the
+ * wait is a loop in the library rather than a wait in here.
  *
- * The budget is a constant here rather than a parameter because that is also
- * what keeps the call argument-free; MUZIX_TTY_READ_TICKS is the same number
- * either way.
+ * One port read, and the answer is exact: input present or not.  Nothing is
+ * consumed - the byte stays in the receive register until tty_do_recv() - and
+ * there is no budget left to bound, so the deadline, the poll backstop and the
+ * MUZIX_TTY_READ_TICKS constant they were measured against are all gone.
  *
- * And it is not `static`, which is the other half of it.  SDCC 4.5 inlines
- * small static functions, and it inlined this one - into muzix_tty_read(), at
- * both call sites, taking `deadline` and its spill with it, which put the cost
- * straight back where it came from and measured 222 bytes again.  A non-static
- * function is not a candidate, so the spill stays in the twenty-odd
- * instructions that need it.  The declaration is in tty_device.h, because an
- * implicit one is a warning on this build and this tree does not have any. */
-/* Whether this board wakes from `halt`, decided at run time, once per boot.
- *
- * MUZIX_HALT_UNPROVEN  take a sample of the tick and loop
- * MUZIX_HALT_GOOD     the tick moved with no halt in the way: interrupts work
- * MUZIX_HALT_BAD      the tick did not move: never halt on this board
- */
-#define MUZIX_HALT_UNPROVEN 0u
-#define MUZIX_HALT_GOOD     2u
-#define MUZIX_HALT_BAD      3u
-
-/* Upper bound on the probe's spin, in passes of the wait loop.  See the case
- * below: generous, because it only has to cover one tick period. */
-#define MUZIX_HALT_PROBE_SPINS 200000u
-
-/* REMOVED: MUZIX_TTY_HALT_ENABLE.
- *
- * This used to gate whether muzix_tty_wait_for_input() was allowed to stop the
- * processor, defaulting to off because a board on 2026-10-04 lit the HALT LED at
- * the prompt and accepted nothing further.  The whole mechanism is gone now, and
- * so is the reason for the switch.
- *
- * The console no longer halts here at all.  The wait is not a loop over the
- * receive line: it is one poll that answers "nothing yet", and the caller - the
- * canonical read in muzix_tty_read() - turns that into MUZIX_READ_AGAIN, which
- * lib/libc.c's read() parks on.  Parking is what stops the processor, it happens
- * in the scheduler where the halt loop already was, and the UART interrupt in
- * platform/zeta-v2/tick.s is what ends it early when a key arrives.
- *
- * So there was nothing left to enable.  A flag that selects between two
- * behaviours, where one of them no longer exists, is worse than no flag: it
- * reads as a live configuration option and invites someone to set it. */
-
-static uint8_t g_halt_state = MUZIX_HALT_UNPROVEN;
-static uint16_t g_halt_sample;
-
+ * A function rather than a loop inside muzix_tty_read(), and not `static`, and
+ * both of those are measurements rather than taste.  SDCC 4.5 is at a
+ * register-allocation cliff in muzix_tty_read() - a thousand-byte function
+ * with a dozen struct fields in play - and a call inside its collect loop
+ * costs spill the loop cannot afford: the loop inline with the call in it
+ * measured +222 bytes, the same call before the loop instead of in it +30,
+ * which is why muzix_tty_collect_line() is a function of its own.  SDCC also
+ * inlines small statics, and it inlined this one straight back into
+ * muzix_tty_read() at both call sites for the same cost.  The declaration is
+ * in tty_device.h, because an implicit one is a warning on this build and this
+ * tree does not have any. */
 int muzix_tty_wait_for_input(void)
 {
-    uint16_t deadline = (uint16_t)(muzix_tick_now() + MUZIX_TTY_READ_TICKS);
-    uint16_t polls = 0;
-
-    /* Bounded on polls as well as on the tick.
-     *
-     * A deadline can only expire if the counter moves.  If the CTC never
-     * interrupts - a board where it is not wired, an emulator whose interrupt
-     * core does not restore IFF1, a tick that stops - then this loop spins
-     * forever and the whole console stops, because the shell's first read is
-     * the one that never returns.  A timeout that cannot time out is worse than
-     * no timeout: it converts a missing feature into a hang.
-     *
-     * The poll bound is deliberately large enough not to fire on a slow poll -
-     * each iteration is a port read, tens of cycles - while still ending in
-     * bounded time if the tick is dead.  It is a backstop, not the mechanism:
-     * the tick is what normally ends the wait. */
-    /* No waiting here.  At all.
-     *
-     * This used to spin on the port until its deadline - five seconds - and hand
-     * back a line if one had assembled.  That is the last place the processor
-     * spent real time with nothing to do, and it is why the busy fraction read
-     * 1.00 while the machine did nothing: the spin was the load.
-     *
-     * Blocking is not this function's job and never was, once there was a way to
-     * hand the processor back.  park() records where in the PROCESS to continue,
-     * the scheduler stops the CPU while nothing is runnable, and the process is
-     * resumed when its deadline arrives or a key does - which is FUZIX's
-     * psleep(), and the reason its plt_switchout can be followed by a bare `ret`.
-     *
-     * So the kernel answers with what it has, now, and lib/libc.c's read() decides
-     * what to do about nothing: it parks.  The point to continue at belongs to the
-     * process, which is the whole reason the wait is a loop in the library rather
-     * than a wait in here.
-     *
-     * One port read, and the answer is exact: input present or not.  The old
-     * deadline and poll backstop are gone with the spin - they existed to bound a
-     * wait, and there is no longer one to bound. */
     return tty_do_avail() ? 1 : 0;
-    return 1;
 }
 
 /* Collect one canonical line into tty->input.  Returns 1 when a line is ready
@@ -611,9 +481,11 @@ int muzix_tty_read(muzix_tty_device_t *tty,
          *
          * The kernel is non-preemptive, so nothing else could run while this
          * loop waited - but "nothing else could run" is not the same as "this
-         * loop should be able to run forever".  The 120 Hz tick now gives it a
-         * deadline (MUZIX_TTY_READ_SECONDS above), which is the difference
-         * between a read that gives up and a read that hangs the machine. */
+         * loop should be able to run forever".  The loop does not wait now:
+         * muzix_tty_wait_for_input() polls once, and a poll that finds nothing
+         * ends the read with MUZIX_READ_AGAIN below, which is the difference
+         * between a read that hands the processor back and a read that hangs
+         * the machine. */
         if (!muzix_tty_collect_line(tty)) {
             /* Nothing arrived.  MUZIX_READ_AGAIN, not -1: this is "ask me
              * again", and lib/libc.c's read() parks on it.  Reported as -1 it
@@ -629,9 +501,24 @@ int muzix_tty_read(muzix_tty_device_t *tty,
         }
         while (tty->line_ready != 0 && count < length &&
                tty->input_length != 0) {
-            buffer[count++] = tty->input[0];
-            memmove(tty->input, tty->input + 1, tty->input_length - 1);
+            /* Take the head byte first, THEN shift the rest left by one.  The
+             * order is the whole point: shift first and the head byte is
+             * overwritten by its successor, so a read returned the line one
+             * byte late and dropped its last byte.  fs/test_tty_device.c's
+             * VIOL case (input "ab\025c\n", expected line "c\n") is what
+             * caught it, exiting 6.
+             *
+             * This was a memmove(), which pulled libc's memmove into everything
+             * that links the TTY - the FS server included - for a one-byte
+             * shift of a short line buffer.  A local loop removes that
+             * dependency and is the same cost at these sizes. */
+            uint8_t pending = tty->input[0];
+            uint8_t shift;
+            for (shift = 0; shift + 1u < (unsigned)tty->input_length; shift++) {
+                tty->input[shift] = tty->input[(uint8_t)(shift + 1u)];
+            }
             tty->input_length--;
+            buffer[count++] = pending;
         }
         if (tty->line_ready != 0 && tty->input_length == 0) {
             tty->line_ready = 0;
@@ -646,9 +533,10 @@ int muzix_tty_read(muzix_tty_device_t *tty,
      * is what a character device read is supposed to do, so the second loop
      * stops on the first gap rather than collecting a full buffer.
      *
-     * The first loop is bounded, for the same reason and with the same
-     * consequences as the canonical one above: five seconds of no input is -1,
-     * reported as an error the caller can retry, rather than a hang. */
+     * The first loop polls once, for the same reason and with the same
+     * consequences as the canonical one above: no input at the moment of the
+     * call is MUZIX_READ_AGAIN, which the caller's read() parks on, rather
+     * than a zero-length read or a hang. */
     if (count == 0 && !muzix_tty_wait_for_input()) {
         /* Nothing in hand, same as the canonical case above and for the same
          * reason: MUZIX_READ_AGAIN, so read() parks instead of the caller

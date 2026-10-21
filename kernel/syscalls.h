@@ -8,6 +8,29 @@
 #include "proc_table.h"
 #include "../mm/mm_service.h"
 #include "../platform/zeta-v2/rtc_ds1302.h"
+#include "../include/muzix_ipc.h"
+
+/* Compile-time gate: MUZIX_MESSAGE_DISPATCH
+ *
+ * When defined (e.g. `make rom MUZIX_MESSAGE_DISPATCH=1`), the kernel
+ * includes a message-routing layer compiled as static inline logic so
+ * SDCC can eliminate it when vm_base == 0 at runtime.  At runtime,
+ * ctx->vm_base selects the path:
+ *
+ *   vm_base == 0   ->  inline dispatch (existing, default)
+ *   vm_base != 0   ->  message dispatch (microkernel IPC path)
+ *
+ * When undefined, the kernel dispatches exactly as before — zero overhead. */
+#ifdef MUZIX_MESSAGE_DISPATCH
+#define MUZIX_MSG_DISPATCH 1
+#else
+#define MUZIX_MSG_DISPATCH 0
+#endif
+
+/* Message routing endpoint identifiers.  Currently only FS is defined;
+ * the kernel-internal endpoints (MM, PM) are reserved for future use. */
+#define MUZIX_MSG_ENDPOINT_NONE  0
+#define MUZIX_MSG_ENDPOINT_FS    1
 
 #define MUZIX_SYS_NULL 0
 #define MUZIX_SYS_COPY 1
@@ -56,7 +79,9 @@
 #define MUZIX_USER_SYS_READDIR 40
 #define MUZIX_USER_SYS_SYNC 30
 #define MUZIX_USER_SYS_SIGNAL 31
-
+#define MUZIX_USER_SYS_IPC_SENDREC 50
+#define MUZIX_USER_SYS_ROM_READ 61
+ 
 #define MUZIX_SYSCALL_OK 0
 #define MUZIX_SYSCALL_FAIL 1
 
@@ -93,6 +118,14 @@ typedef struct muzix_userspace_syscall_context {
     uint16_t euid;
     uint16_t egid;
     uint16_t umask;
+    /* Virtual memory base for message dispatch.  0 (default) means inline
+     * dispatch; the kernel calls service functions directly.  Non-zero
+     * enables the message path: the syscall is packed into a
+     * muzix_system_message_t and routed through the endpoint identified by
+     * muzix_msg_route().  A microkernel build would set this to the shared
+     * message-page address.  Always zeroed at runtime init; only non-zero
+     * when MUZIX_MESSAGE_DISPATCH is compiled in and explicitly configured. */
+    uint16_t vm_base;
 } muzix_userspace_syscall_context_t;
 
 /* muzix_tms_t - the four counters SYS_TIMES used to answer with - is gone.
@@ -122,14 +155,91 @@ typedef char muzix_rtc_layout_check[
     (sizeof(muzix_rtc_time_t) == 7u) ? 1 : -1];
 
 int muzix_handle_syscall(muzix_syscall_context_t *ctx, const muzix_syscall_t *call);
-int muzix_sys_copy_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call);
-int muzix_sys_yield_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call);
-int muzix_sys_exit_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call);
 int32_t muzix_handle_userspace_syscall(
     muzix_userspace_syscall_context_t *ctx,
     int32_t syscall_num,
     int32_t arg1,
     int32_t arg2,
     int32_t arg3);
+
+/* Functions used by IPC-based syscall dispatcher */
+int muzix_current_slot(muzix_userspace_syscall_context_t *ctx);
+muzix_proc_slot_t *muzix_current_process(muzix_userspace_syscall_context_t *ctx);
+int32_t muzix_dispatch_userspace_syscall(
+    muzix_userspace_syscall_context_t *ctx,
+    int32_t syscall_num,
+    int32_t arg1,
+    int32_t arg2,
+    int32_t arg3);
+
+/* User memory copy helpers */
+int muzix_copy_user_from_current(
+    muzix_userspace_syscall_context_t *ctx,
+    uint16_t address,
+    uint8_t *buffer,
+    size_t length);
+int muzix_copy_user_to_current(
+    muzix_userspace_syscall_context_t *ctx,
+    uint16_t address,
+    const uint8_t *buffer,
+    size_t length);
+
+/* Server copy helpers (copy to/from specific process slot) */
+int muzix_copy_to_proc(
+    muzix_userspace_syscall_context_t *ctx,
+    uint8_t target_slot,
+    uint16_t target_addr,
+    const uint8_t *buffer,
+    uint16_t length);
+int muzix_copy_from_proc(
+    muzix_userspace_syscall_context_t *ctx,
+    uint8_t target_slot,
+    uint16_t target_addr,
+    uint8_t *buffer,
+    uint16_t length);
+
+/*
+ * Copy between two userspace processes, by slot.
+ *
+ * These exist because muzix_copy_from_proc()/muzix_copy_to_proc() take a
+ * KERNEL destination, and a server's buffer is not one: while the client's page
+ * is installed in the window the address falls in, the "kernel" destination
+ * resolves to the client's own page, so the copy writes onto its source and
+ * transfers nothing - silently.  A server must use these instead.
+ *
+ * Both directions are the same two-hop move (source user -> kernel staging ->
+ * destination user), so `server_slot` is the same process's slot either way and
+ * the two functions differ only in which end is named first.
+ */
+int muzix_copy_client_to_server(
+    muzix_userspace_syscall_context_t *ctx,
+    uint8_t client_slot,
+    uint16_t client_addr,
+    uint8_t server_slot,
+    uint16_t server_addr,
+    uint16_t length);
+int muzix_copy_server_to_client(
+    muzix_userspace_syscall_context_t *ctx,
+    uint8_t client_slot,
+    uint16_t client_addr,
+    uint8_t server_slot,
+    uint16_t server_addr,
+    uint16_t length);
+
+/* IPC sendrec handler */
+
+/* IPC handler for server copy */
+int32_t muzix_handle_srv_copy_to_client(
+    muzix_userspace_syscall_context_t *ctx,
+    int16_t client_slot,
+    uint16_t client_addr,
+    const uint8_t *buffer,
+    uint16_t length);
+int32_t muzix_handle_srv_copy_from_client(
+    muzix_userspace_syscall_context_t *ctx,
+    int16_t client_slot,
+    uint16_t client_addr,
+    uint8_t *buffer,
+    uint16_t length);
 
 #endif

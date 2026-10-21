@@ -5,6 +5,11 @@
 
 void z80_outb(uint8_t port, uint8_t value);
 
+/* Compiler memory barrier to prevent reordering of memory accesses across
+ * bank register writes. Use before reading from window 3 (_DATA) after
+ * a bank switch that changes window 3's mapping. */
+#define Z80_MEMORY_BARRIER()  __asm__("")
+
 /* Stop the processor until the next enabled interrupt, then carry on.
  *
  * Not inline asm in C: an SDCC `__asm` block does not compile on a host, and

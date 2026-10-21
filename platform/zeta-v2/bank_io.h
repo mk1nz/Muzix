@@ -23,6 +23,14 @@ extern uint16_t muzix_zeta_staged_dst;
 extern uint16_t muzix_zeta_staged_len;
 void muzix_zeta_ldir_staged(void);
 
+/* The same ldir with its operands in the same three cells, but as a named call
+ * for the copy that has arguments to hand anyway - kernel/rom_read.c's boot
+ * copy, which used to move a 256-byte chunk with fifteen byte-loop
+ * instructions per byte and spent 5.4 million instructions of the boot doing
+ * it.  Set the three words, call, and the caller's own pointers are already
+ * correct for the map it installed. */
+void muzix_zeta_ldir_copy(void);
+
 
 /* What this module still exports, after 2026-10-02.
 

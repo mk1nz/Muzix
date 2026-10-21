@@ -9,4 +9,5 @@ hwdiag.rel
 ../lib/libc.rel
 ../lib/syscall.rel
 ../lib/user_syscall.rel
+../lib/z80_io.rel
 -e

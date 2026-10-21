@@ -38,6 +38,27 @@ int muzix_mm_copy_maps(muzix_mm_service_t *mm,
                        uint16_t dst_vir,
                        size_t bytes);
 
+/* Copy from one userspace process to another, by SLOT NUMBER.
+ *
+ * This is the entry point a server uses for SYS_IPC_SRV_COPY_*_CLIENT, and it
+ * is the one that must be used there.  muzix_mm_copy_user_to_kernel() - the
+ * single-sided primitive - takes a KERNEL destination, and a server's buffer is
+ * not one: while the client's page is installed in the window the address falls
+ * in, the "kernel" destination resolves to the client's own page, so the copy
+ * writes onto its source and transfers nothing.  No error, no bytes.
+ *
+ * Two hops, both MM-mediated: source user -> kernel staging -> destination
+ * user.  The staging buffer is the kernel's, so neither process is ever asked
+ * to be the other's window.  Defined in mm/mm_copy.c, which is what makes this
+ * file's module a memory-manager module for tools/check_memory_manager.rb.
+ */
+int muzix_mm_copy_user_to_user(muzix_mm_service_t *mm,
+                               uint8_t src_proc,
+                               uint16_t src_vir,
+                               uint8_t dst_proc,
+                               uint16_t dst_vir,
+                               uint16_t bytes);
+
 /* Copy a kernel buffer into an already-resolved process map.
  *
  * The map is passed rather than a slot, because the destination is not always

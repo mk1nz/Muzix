@@ -264,3 +264,48 @@ int32_t sys_readdir(int32_t fd, int32_t index, void *entry)
 {
     return SYSCALL(SYS_READDIR, fd, index, entry);
 }
+
+int32_t sys_ipc_sendrec(int32_t dest_slot, void *msg)
+{
+    return SYSCALL(SYS_IPC_SENDREC, dest_slot, msg, 0);
+}
+
+/* Send-only IPC: the MINIX send() half, with no receive attached.
+ *
+ * This exists because the kernel's SYS_IPC_SENDREC to a specific slot runs
+ * mini_send AND THEN mini_rec from that same peer (kernel/syscalls_ipc.c's
+ * else branch).  For a server's REPLY that second half is a thief: it leaves
+ * the server blocked-receiving-from-its-client, and the client's NEXT request
+ * - mini_send matches a receiver waiting on exactly that caller - is copied
+ * into the reply sendrec's dead buffer instead of into the server's own
+ * ANY-receive, where the request is then never found.  Measured: the shell
+ * read five bytes through five such round trips and the sixth read parked
+ * forever, because the FS's handle_read never saw the request that had landed
+ * in the dead reply frame.  MINIX keeps the two halves separate for exactly
+ * this reason: replies go out with send(), and the next request is collected
+ * by the server's own receive(). */
+int32_t sys_ipc_send(int32_t dest_slot, void *msg)
+{
+    return SYSCALL(SYS_IPC_SEND, dest_slot, msg, 0);
+}
+
+int32_t sys_ipc_copy_to_user(uint16_t addr, const void *buf, size_t len)
+{
+    return SYSCALL(SYS_IPC_COPY_TO_USER, addr, buf, len);
+}
+
+int32_t sys_ipc_copy_from_user(uint16_t addr, void *buf, size_t len)
+{
+    return SYSCALL(SYS_IPC_COPY_FROM_USER, addr, buf, len);
+}
+
+/* Server copy functions (use IPC message source as target process) */
+int32_t sys_ipc_srv_copy_to_client(uint16_t addr, const void *buf, size_t len)
+{
+    return SYSCALL(SYS_IPC_SRV_COPY_TO_CLIENT, addr, buf, len);
+}
+
+int32_t sys_ipc_srv_copy_from_client(uint16_t addr, void *buf, size_t len)
+{
+    return SYSCALL(SYS_IPC_SRV_COPY_FROM_CLIENT, addr, buf, len);
+}

@@ -200,7 +200,10 @@ test_sources = SOURCE_DIRS.flat_map { |d| glob("#{d}/**/test_*.c") }
                            .reject { |p| rel(p).start_with?('emulator/') }.sort
 
 # lib/libc.c and lib/romfs_data.c: see the note on SOURCE_DIRS.
-HOST_POOL_EXCLUDED = ['lib/libc.c', 'lib/romfs_data.c'].freeze
+# msg_pool and proc_server are microkernel prep modules; proc_server is not linked
+# into the kernel (overflow), so they're excluded from the host pool.
+HOST_POOL_EXCLUDED = ['lib/libc.c', 'lib/romfs_data.c',
+                      'kernel/msg_pool.c', 'kernel/proc_server.c'].freeze
 
 module_sources = SOURCE_DIRS.flat_map { |d| glob("#{d}/**/*.c") }
                              .reject { |p| File.basename(p) =~ /\Atest_/ }
@@ -211,9 +214,41 @@ module_sources = SOURCE_DIRS.flat_map { |d| glob("#{d}/**/*.c") }
 # Deterministic pool order, taken from the Makefile's link order so that the
 # host link and the ROM link agree about who owns a global where two modules
 # define the same one.
-link_order = File.read(File.join(ROOT, 'Makefile'), encoding: 'UTF-8')
-                     .split('KERNEL_LINK_ORDER').to_a.last.to_s.split("\n\n").first.to_s
-                     .scan(/(\w+)\.rel/).flatten
+#
+# The parse reads the KERNEL_LINK_ORDER := definition block - the line that
+# names it plus every line that continues it with a trailing backslash - and
+# keeps that file order, because the order IS the thing being asked about.
+#
+# The old parse split the Makefile on the string 'KERNEL_LINK_ORDER' and took
+# the text after the LAST occurrence.  The last occurrence is the recipe's
+# $(KERNEL_LINK_ORDER) expansion in the second link pass, and there are no .rel
+# tokens in a recipe: link_order came back empty on every run, every index()
+# below returned nil, and the sort key degenerated to [pool size, path] -
+# alphabetical.  sdldz80 resolves a duplicate global to the first definition in
+# link order and the host linker to the order it is handed, so the two silently
+# disagreed about which module owns a shared global, which is the one difference
+# this ordering exists to police.  A parse that comes back empty is now a hard
+# failure rather than a silent fall back to alphabetical.
+def kernel_link_order(makefile)
+  reading = false
+  File.readlines(makefile, encoding: 'UTF-8').each_with_object([]) do |line, rels|
+    if reading
+      rels.concat(line.scan(/(\w+)\.rel/).flatten)
+      reading = line.rstrip.end_with?('\\')
+    elsif line =~ /\AKERNEL_LINK_ORDER\s*:?=/
+      rels.concat(line.scan(/(\w+)\.rel/).flatten)
+      reading = line.rstrip.end_with?('\\')
+    end
+  end
+end
+
+link_order = kernel_link_order(File.join(ROOT, 'Makefile'))
+if link_order.empty?
+  abort 'host tests: no .rel names found in the KERNEL_LINK_ORDER definition ' \
+        'in the Makefile. The module pool order is what makes the host link ' \
+        'agree with the ROM link about duplicate globals, so it cannot fall ' \
+        'back to alphabetical.'
+end
 module_sources.sort_by! do |p|
   base = File.basename(p, '.c')
   [link_order.index(base) || link_order.size, p]
@@ -325,7 +360,12 @@ def run(exe)
   end
   Process.wait(pid)
   output = r.read(65_536).to_s
-  puts "      #{output.strip}" unless output.strip.empty? || VERBOSE
+  # --verbose asks for the test's own output.  The old condition was inverted:
+  # `unless output.empty? || VERBOSE` printed the output only when --verbose was
+  # NOT given, so the flag that promises output suppressed it and a silent run
+  # looked quiet whether the tests spoke or not.  The output of a failing test
+  # is the only place its assertion text appears.
+  puts "      #{output.strip}" if !output.strip.empty? && VERBOSE
   # A child killed by a signal has no exit status at all: $?.exitstatus is nil,
   # and nil.to_i is 0.  So `status == 0` used to mean "passed" for every
   # segfault, which is worse than the fabricated coverage this script replaced -

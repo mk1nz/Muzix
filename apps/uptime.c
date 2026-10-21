@@ -141,10 +141,10 @@ static void out2(int value)
  *
  * Place values and a repeated subtraction per place, the way print_unsigned() in
  * lib/libc.c does it, and for the reason given there: `/` and `%` on this build
- * are calls to __divuint and __moduint, which no userspace link line provides,
- * and an unresolved global is a definition at 0x0000 - the boot stub.  A
- * program that divided would run the stub's ldir and jump back into
- * kernel_main, which is what a `date` with one %d in it used to do.
+ * are calls to __divuint and __moduint, which lib/math.s does provide - but
+ * they used to return the result in HL while the compiled caller reads DE, and
+ * a division through them was a silent wrong answer.  The practice of dividing
+ * by subtraction stands on that, not on a missing definition.
  *
  * put_field() in top.c counts the same subtractions but writes into
  * `char digits[10]`, so it is a two-digit printer: given 2026 it counts 202
@@ -172,7 +172,6 @@ static void out_number(int32_t value)
      * Straight into the line buffer: the first version collected them into a
      * local array and walked it backwards, and printed 2026 as 6202. */
     for (start = 0; start < 4 && value < places[start]; start++) {
-        continue;
     }
     for (i = start; i < 5; i++) {
         int digit = 0;
@@ -188,10 +187,13 @@ static void out_number(int32_t value)
 /* Elapsed seconds into days, and hours, minutes and seconds within the day.
  *
  * By subtraction rather than division, and the reason is the same one as
- * everywhere else in this tree: `/` on an int32_t is a call to __divsint, which
- * no userspace link line provides, and an unresolved global is a definition at
- * 0x0000 - the boot stub, so a program that divided would restart the machine
- * instead of printing.
+ * everywhere else in this tree: a 32-bit `/` on an int32_t is a call to
+ * __divslong, which no userspace link line provides - an unresolved global is
+ * a definition at 0x0000 - the boot stub, so a program that divided would
+ * restart the machine instead of printing.  The 16-bit helpers __divsint and
+ * its relatives DO resolve here, and are avoided for the other reason: they
+ * used to return the result in HL while the compiled caller reads DE, which
+ * is a silent wrong answer rather than a crash.
  *
  * The hours loop is entered at most 23 times and the day loop once per day of
  * uptime; the day loop is the reason the whole thing takes a moment rather than

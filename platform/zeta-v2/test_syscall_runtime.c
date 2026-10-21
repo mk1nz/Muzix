@@ -42,9 +42,7 @@ static int test_syscall_runtime(void)
     }
 
     muzix_zeta_syscall_runtime_init(&runtime, &loop, &fs);
-    if (!runtime.bound || sys_getpid() != 0 ||
-        fs.tty != &runtime.tty || !runtime.tty.send ||
-        !runtime.tty.recv || !runtime.tty.available) {
+    if (!runtime.bound || sys_getpid() != 0 || fs.tty != 0) {
         return 4;
     }
     muzix_zeta_syscall_runtime_reset(&runtime);

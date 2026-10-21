@@ -103,23 +103,50 @@ asm_modules.each { |file, mod| wanted[mod] = file if bank_modules.key?(File.join
 # window 3 the moment a process is running.
 #
 # A rule that is true and unenforced is a comment.  This one is enforced.
+#
+# muzix_zeta_uart is here because of what it is reachable FROM, not from what it
+# does: the two refusal paths in the window-0 handoff entries print their '!'
+# through it (kernel_entry.s's _enter_userspace_refused, context_switch.c's
+# zeta_resume_process NULL refusal) before spinning, and its transmit wait reads
+# _muzix_tick_count, which is why the Makefile links zeta_uart_io.rel into the
+# window-0 prefix right after tick.rel.  A module the prefix carries by design
+# has to be a module the gate can see: uart_io.s programs no bank register, so
+# the source scan above never names it, and until it was listed here kernel
+# growth could have carried it past 0x4000 with every gate passing.  The
+# requirement is defence-in-depth - both refusal paths run under the kernel
+# map, under which any address is kernel memory - and it is enforced because
+# the next caller may not be.
 PINNED_MODULES = %w[
   muzix_kernel_entry
   muzix_syscall_entry
   muzix_tick
+  muzix_zeta_bank_io
+  muzix_zeta_uart
 ].freeze
 
 WINDOW_SIZE = 0x4000
 
-# Individually named entry points.  Redundant with the module rule above, and
-# kept anyway: if a module is ever renamed or split, these still fail rather
-# than silently falling out of the check.
+# _muzix_live_banks is the window-0 mirror of the four bank registers, and it is
+# pinned for the reason the entry points above are: the trap reads it once it has
+# installed the kernel map, to learn which map it displaced, and publishes that
+# into _g_saved_user_context for the exit path to restore.  It can only be window
+# 0.  The alternatives are reading the write-only ports, which the platform
+# forbids, or reading state->bank_reg[] in _DATA, which is window 2 and is the
+# calling process's own page at that point.  A stale mirror is what handed a
+# process the kernel map back on its first syscall: it resumed running kernel
+# code under its own stack and walked into the boot stub.
+#
+# The entry no longer owns a UART helper or an entry message.  It used to call
+# _uart_write_direct("TRAPENTRY\r\n") before the map was installed, which fired
+# a direct port write on every single syscall and buried the real boot output in
+# noise; AGENTS.md's rule is that the trap's tracing goes to the ring buffer in
+# platform/zeta-v2/trace.c, and that path (after the four OUTs) is what remains.
+# Both names were removed with the call, so pinning them here would pin two
+# symbols nothing defines.
 PINNED_SYMBOLS = %w[
   _muzix_z80_syscall_entry
   _muzix_zeta_enter_userspace
   _muzix_zeta_resume_from
-  _zeta_resume_jump
-  _zeta_enter_process
   _zeta_resume_process
   _zeta_load_map
   _zeta_kernel_enter
@@ -127,6 +154,9 @@ PINNED_SYMBOLS = %w[
   _muzix_zeta_caller_in_window0
   _muzix_tick_isr
   _muzix_tick_init
+  _muzix_set_entry_point
+  _g_zeta_state_ptr
+  _muzix_live_banks
 ].freeze
 
 map_path = ARGV[0] or abort "usage: check_window0.rb <kernel.map> [repo-root]"

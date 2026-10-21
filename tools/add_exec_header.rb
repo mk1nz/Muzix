@@ -9,5 +9,7 @@ map = File.read(map_file)
 match = map.match(/^\s*([0-9A-Fa-f]+)\s+start\s+/)
 abort "missing start in #{map_file}" unless match
 entry = Integer(match[1], 16)
+# The header is 4 bytes prepended; the linker-derived start symbol is the
+# address the code runs at, so it is stored verbatim.
 header = [0x4d, 0x5a, entry & 0xff, (entry >> 8) & 0xff].pack("C*")
 File.binwrite(input, header + image)

@@ -1,8 +1,6 @@
 #include "fs_service.h"
 
 #include <string.h>
-#include "../platform/zeta-v2/uart_io.h"
-#include "../platform/zeta-v2/trace.h"
 
 #define MUZIX_FS_OPEN_KIND_INODE 0u
 #define MUZIX_FS_OPEN_KIND_PIPE 1u
@@ -22,9 +20,9 @@ static int muzix_fs_service_normalize_path(const muzix_fs_service_t *fs,
                                            char *output,
                                            size_t size);
 static int muzix_fs_service_lookup_parent(muzix_fs_service_t *fs,
-                                          char *normalized,
-                                          const char **leaf,
-                                          uint16_t *parent_inode);
+                                           const char *normalized,
+                                           const char **leaf,
+                                           uint16_t *parent_inode);
 static muzix_fs_directory_t *muzix_fs_service_dir_load(muzix_fs_service_t *fs,
                                                        uint16_t inode,
                                                        uint16_t *zone);
@@ -112,7 +110,7 @@ static int muzix_fs_service_lookup_component(void *context,
                                              uint16_t *inode)
 {
     muzix_fs_service_t *fs = (muzix_fs_service_t *)context;
-    muzix_fs_inode_t *directory;
+    const muzix_fs_inode_t *directory;
     muzix_fs_directory_t entries;
 
     if (!fs || !fs->volume || !fs->volume->mounted || !fs->inodes ||
@@ -129,7 +127,7 @@ static int muzix_fs_service_lookup_component(void *context,
 }
 
 void muzix_fs_service_init(muzix_fs_service_t *fs,
-                           muzix_system_task_t *system_task,
+                           void *system_task,
                            uint8_t source)
 {
     if (!fs) {
@@ -233,7 +231,16 @@ int muzix_fs_service_mkdir_path(muzix_fs_service_t *fs,
         goto done;
     }
     if (muzix_fs_volume_flush(fs->volume) != 0) {
+        /* Undo the whole allocation, not just the directory entry.  The child
+         * inode and its zone were both marked in use before the flush was
+         * attempted, so dropping only the entry leaked them: the device this
+         * filesystem actually has is a ROM image whose flush always fails, and
+         * each mkdir on it would consume one inode and one zone until
+         * muzix_fs_inode_alloc() and muzix_fs_zone_alloc() had nothing left to
+         * give, with nothing on disk to show for it. */
         muzix_fs_directory_remove(directory, leaf);
+        muzix_fs_zone_free(&fs->volume->allocator, zone);
+        muzix_fs_inode_release(&fs->volume->inodes, *inode);
         goto done;
     }
     status = 0;
@@ -276,7 +283,6 @@ static int muzix_fs_service_normalize_path(const muzix_fs_service_t *fs,
     char component[MUZIX_FS_NAME_MAX + 1];
     size_t combined_length;
     size_t output_length = 1;
-    size_t component_length;
     const char *cursor;
 
     if (!fs || !path || !output || size < 2) {
@@ -310,7 +316,7 @@ static int muzix_fs_service_normalize_path(const muzix_fs_service_t *fs,
         if (!*cursor) {
             break;
         }
-        component_length = 0;
+        size_t component_length = 0;
         while (cursor[component_length] && cursor[component_length] != '/') {
             /* MUZIX_FS_NAME_MAX characters are storable: a directory entry
              * holds 14 name bytes, muzix_fs_name_valid accepts 14, and the
@@ -358,12 +364,12 @@ static int muzix_fs_service_normalize_path(const muzix_fs_service_t *fs,
  * lookup and restored before returning, which removes the separate 64-byte
  * parent buffer and the 15-byte name copy every path operation used to carry:
  * with the 455-byte user-syscall dispatcher and the 260-byte
- * muzix_fs_service_lookup_component frame already live below, those two
+* muzix_fs_service_lookup_component frame already live below, those two
  * buffers alone pushed the chain past the 1317-byte stack. */
 static int muzix_fs_service_lookup_parent(muzix_fs_service_t *fs,
-                                          char *normalized,
-                                          const char **leaf,
-                                          uint16_t *parent_inode)
+                                           const char *normalized,
+                                           const char **leaf,
+                                           uint16_t *parent_inode)
 {
     char *slash;
     char saved;
@@ -830,7 +836,23 @@ static int muzix_fs_service_truncate_inode(muzix_fs_service_t *fs,
     muzix_fs_inode_t inode_snapshot = *inode;
     uint8_t *data;
     uint16_t zone;
-    uint16_t offset;
+    // uint16_t offset; // Moved closer to use
+
+    /* A device inode stores the device id in zone[0] (MUZIX_FS_TTY_DEVICE for
+     * the only kind mknod can create), not a zone number.  Handing it to the
+     * allocator used to be harmless by luck: 0x0100 is past the old
+     * MUZIX_FS_MAX_ZONES of 256, so muzix_fs_zone_free() refused it and the
+     * whole truncate aborted.  With the ceiling raised to the image's 768 that
+     * luck runs out - 0x0100 is now a perfectly legal zone number, so the free
+     * would succeed and clear a bit that belongs to a real file.  Device inodes
+     * own no zones at all, which is the same conclusion
+     * muzix_fs_service_reclaim_inode() reaches; there is nothing here to free
+     * but the size. */
+    if ((inode->mode & MUZIX_FS_MODE_TYPE) == MUZIX_FS_MODE_CHAR ||
+        (inode->mode & MUZIX_FS_MODE_TYPE) == MUZIX_FS_MODE_BLOCK) {
+        inode->size = 0;
+        return 0;
+    }
 
     for (uint8_t index = 0; index < MUZIX_FS_DIRECT_ZONES; index++) {
         zone = inode->zone[index];
@@ -848,7 +870,7 @@ static int muzix_fs_service_truncate_inode(muzix_fs_service_t *fs,
             *inode = inode_snapshot;
             return -1;
         }
-        for (offset = 0; offset + 1 < MUZIX_FS_BLOCK_SIZE; offset += 2) {
+        for (uint16_t offset = 0; offset + 1 < MUZIX_FS_BLOCK_SIZE; offset += 2) {
             zone = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
             if (zone != 0 && muzix_fs_zone_free(&fs->volume->allocator, zone) != 0) {
                 fs->volume->allocator = allocator_snapshot;
@@ -967,7 +989,7 @@ done:
 
 int muzix_fs_service_chdir(muzix_fs_service_t *fs, const char *path)
 {
-    muzix_fs_inode_t *entry;
+    const muzix_fs_inode_t *entry;
     uint16_t inode;
     char normalized[MUZIX_FS_PATH_MAX];
 
@@ -987,9 +1009,9 @@ int muzix_fs_service_chdir(muzix_fs_service_t *fs, const char *path)
     return 0;
 }
 
-int muzix_fs_service_getcwd(muzix_fs_service_t *fs,
-                            char *buffer,
-                            size_t size)
+int muzix_fs_service_getcwd(const muzix_fs_service_t *fs,
+                             char *buffer,
+                             size_t size)
 {
     size_t length;
 
@@ -1432,7 +1454,15 @@ static int muzix_fs_service_rename_relink(muzix_fs_service_t *fs,
         return -1;
     }
     for (uint8_t slot = 0; slot < MUZIX_FS_DIR_ENTRIES; slot++) {
-        if (strcmp(target->entries[slot].name, "..") == 0) {
+        /* Bounded, not strcmp.  An entry holds 14 name bytes and a name of 14
+         * characters uses all of them, so there is no room left for a
+         * terminator - and 14 is exactly what muzix_fs_path_lookup and
+         * muzix_fs_name_valid accept.  strcmp() would read past the 14 bytes
+         * and on through the rest of the 256-byte directory image looking for
+         * a NUL it has no guarantee of finding.  strncmp against ".." stops at
+         * 14 bytes and still matches only a real "..". */
+        if (strncmp(target->entries[slot].name, "..",
+                    MUZIX_FS_NAME_MAX) == 0) {
             previous = target->entries[slot].inode;
             target->entries[slot].inode = new_parent_inode;
             found = 1;

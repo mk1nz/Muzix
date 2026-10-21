@@ -36,6 +36,21 @@ int strncmp(const char *s1, const char *s2, size_t n)
     return (unsigned char)*s1 - (unsigned char)*s2;
 }
 
+char *strrchr(const char *s, int c)
+{
+    char *last = 0;
+    while (*s) {
+        if (*s == (char)c) {
+            last = (char *)s;
+        }
+        s++;
+    }
+    if (c == '\0') {
+        return (char *)s;
+    }
+    return last;
+}
+
 char *strcpy(char *dest, const char *src)
 {
     char *d = dest;
@@ -167,35 +182,112 @@ char *itoa(int value, char *str, int base)
     char buffer[33];
     char *ptr = buffer + sizeof(buffer) - 1;
     int negative = 0;
-    
+
     if (base < 2 || base > 36) {
         return NULL;
     }
-    
+
     *ptr = '\0';
-    
+
     if (value < 0) {
         negative = 1;
         value = -value;
     }
-    
+
+    /* Divide by repeated subtraction, the sanctioned technique on this
+     * target and the one print_unsigned() below already uses: `value % base`
+     * and `value /= base` are calls to __modsint and __divsint.  Those
+     * helpers DO resolve - lib/math.s defines them and every app map file
+     * lists them - so the reason to avoid them here is not a missing
+     * definition, it is that they historically returned the result in HL
+     * while the compiled caller reads DE, and a divide through them was a
+     * silent wrong answer.  The practice stays; only the excuse for it was
+     * wrong.  See the same loop in print_unsigned(), put_field() in
+     * apps/top.c and load_seconds() in kernel/load.c.
+     *
+     * `rest` is the digit (it is the running remainder, so it indexes
+     * digits[] safely at 0..base-1) and `quo` carries the quotient into the
+     * next round.  At worst that is value iterations of a compare and a
+     * subtract - nothing next to the 16 digits this can emit. */
     do {
-        *--ptr = digits[value % base];
-        value /= base;
+        int rest = value;
+        int quo = 0;
+
+        while (rest >= base) {
+            rest = rest - base;
+            quo++;
+        }
+        *--ptr = digits[rest];
+        value = quo;
     } while (value);
-    
+
     if (negative) {
         *--ptr = '-';
     }
-    
+
     strcpy(str, ptr);
     return str;
+}
+
+/*
+ * Stdout is line-buffered, and this is the whole of that.
+ *
+ * Every character used to be its own sys_write: the banner of the shell is 232
+ * characters and therefore 232 complete microkernel round trips - the shell
+ * traps, the kernel routes, the FS is dispatched, the byte is copied through an
+ * MM exchange, the reply comes back, the shell is dispatched again - measured
+ * at about 27,000 instructions per character, which is most of the 6.9 million
+ * the boot spends between the scheduler starting and the prompt.  At 4 MHz
+ * that is half a minute to print a banner.
+ *
+ * Line buffering is the default for a console and is what everything here
+ * prints anyway: the banner's five lines, uptime's two lines, the error messages
+ * all end in a newline.  One write per line is then sixty writes where there
+ * were two hundred and thirty, and the shell prompt - which deliberately has no
+ * newline - is flushed explicitly where it is printed.
+ *
+ * The buffer is one per process because libc is linked into each one, so the
+ * shell, the apps and the servers each have their own and none of them can see
+ * another's.
+ */
+#define MUZIX_STDOUT_BUF 64
+static unsigned char muzix_stdout_buf[MUZIX_STDOUT_BUF];
+static unsigned char muzix_stdout_len;
+
+/* Hand the buffer to the kernel and empty it.  Returns what sys_write
+ * returned, which is the count or a negative status; the caller of putchar is
+ * told success either way, as before, because a console that failed mid-line
+ * is not something a print loop can act on. */
+static int muzix_stdout_flush(void)
+{
+    int rc = 0;
+
+    if (muzix_stdout_len != 0) {
+        rc = sys_write(1, muzix_stdout_buf, muzix_stdout_len);
+        muzix_stdout_len = 0;
+    }
+    return rc;
+}
+
+/* The explicit flush, for output that does not end in a newline: the prompt,
+ * and anything a program prints and then blocks on. */
+void muzix_stdout_flush_now(void)
+{
+    (void)muzix_stdout_flush();
 }
 
 int putchar(int c)
 {
     unsigned char value = (unsigned char)c;
-    return sys_write(1, &value, 1) == 1 ? c : -1;
+
+    if (muzix_stdout_len >= MUZIX_STDOUT_BUF) {
+        (void)muzix_stdout_flush();
+    }
+    muzix_stdout_buf[muzix_stdout_len++] = value;
+    if (value == '\n') {
+        (void)muzix_stdout_flush();
+    }
+    return c;
 }
 
 /* Return one byte, waiting for it.
@@ -235,49 +327,37 @@ void puts(const char *str)
  * This counts digits down through a table of place values and takes each digit
  * by repeated subtraction, rather than using `/` and `%`.  That is not a
  * stylistic choice.  On this build `value % base` and `value / base` compile
- * to calls to __moduint and __divuint, and no module in any userspace link
- * line provides them - lib/libc.rel, lib/syscall.rel, lib/math.rel and
- * lib/sdcc_runtime.rel are all that get linked - so the calls went to address
- * 0, which on this platform is the ROM boot stub.  A program that printed a
- * number did not print a number: it ran the boot stub's `ldir` and jumped
- * back into kernel_main.
- *
- * That is why no %d appears anywhere in the existing userspace, and it is how
- * this went unnoticed.  Measured: `date` with a single %d in it printed
- * everything before the conversion and then hung, with the PC marching
- * linearly up through the boot stub.
+ * to calls to __moduint and __divuint, and while those helpers DO resolve -
+ * lib/math.s defines them and every app map file lists them - they used to
+ * return the result in HL while SDCC's generated caller reads DE, so every
+ * division done through them was a silent wrong answer (and __moduint's
+ * remainder came back in A, and its loop compared the divisor's low byte
+ * alone).  They are fixed now, but the tree-wide practice of dividing by
+ * subtraction stands because of that history, and this function is the
+ * reference implementation of it.
  *
  * The tables cover the full range of a 16-bit unsigned int, which is the
  * widest value printf can be handed.
  */
-static void print_unsigned(unsigned int value, unsigned int base)
+static void print_unsigned(unsigned int value, unsigned int base, unsigned int width, int zeropad)
 {
     static const char digits[] = "0123456789abcdef";
     static const unsigned int places_dec[] = { 10000, 1000, 100, 10, 1 };
     static const unsigned int places_hex[] = { 4096, 256, 16, 1 };
     const unsigned int *places = (base == 16) ? places_hex : places_dec;
     unsigned int nplaces = (base == 16) ? 4u : 5u;
-    char buffer[sizeof(unsigned int) * 2 + 1];
+    char buffer[8];
     char *out = buffer;
     unsigned int start;
     unsigned int i;
+    unsigned int ndigits;
 
-    /* The highest place the value reaches, so that 7 prints as "7" rather
-     * than "00007".  The units place is always emitted, so the walk stops one
-     * short of the end. */
     for (start = 0; start + 1u < nplaces && value < places[start]; start++) {
         continue;
     }
 
-    /* Digits are appended most significant first and the result is then walked
-     * forwards.  The previous version filled the buffer from the back towards
-     * the front and printed forwards from the front, which emits the digits in
-     * reverse: 19 printed as 91, 12345 as 54321, 1996 as 6991.  Single-digit
-     * values and 0xff are their own reverses, so nothing that used to be
-     * printed here would have shown it. */
     for (i = start; i < nplaces; i++) {
         unsigned int digit = 0;
-
         while (value >= places[i]) {
             value = (unsigned int)(value - places[i]);
             digit++;
@@ -285,6 +365,13 @@ static void print_unsigned(unsigned int value, unsigned int base)
         *out++ = digits[digit];
     }
     *out = '\0';
+
+    ndigits = out - buffer;
+    if (zeropad && width > ndigits) {
+        for (i = 0; i < width - ndigits; i++) {
+            putchar('0');
+        }
+    }
 
     for (out = buffer; *out; out++) {
         putchar(*out);
@@ -302,6 +389,13 @@ void printf(const char *fmt, ...)
             continue;
         }
         fmt++;
+        int zeropad = 0;
+        unsigned int width = 0;
+        while (*fmt == '0' || (*fmt >= '1' && *fmt <= '9')) {
+            if (*fmt == '0') zeropad = 1;
+            else width = width * 10 + (*fmt - '0');
+            fmt++;
+        }
         switch (*fmt++) {
         case '%':
             putchar('%');
@@ -322,11 +416,14 @@ void printf(const char *fmt, ...)
                 putchar('-');
                 value = -value;
             }
-            print_unsigned((unsigned int)value, 10);
+            print_unsigned((unsigned int)value, 10, width, zeropad);
             break;
         }
+        case 'u':
+            print_unsigned(va_arg(args, unsigned int), 10, width, zeropad);
+            break;
         case 'x':
-            print_unsigned(va_arg(args, unsigned int), 16);
+            print_unsigned(va_arg(args, unsigned int), 16, width, zeropad);
             break;
         default:
             putchar('?');
@@ -349,6 +446,10 @@ int exec(const char *path, const char *const *argv)
 
 void exit(int status)
 {
+    /* Anything still buffered leaves with the process: a program whose last
+     * printf had no newline, or whose line buffer was still filling when it
+     * gave up, would otherwise lose it silently. */
+    (void)muzix_stdout_flush();
     sys_exit(status);
 }
 
@@ -502,13 +603,18 @@ void sync(void)
  *
  * The cause is not a mistake in the expressions but the two runtime routines
  * they call.  `%` and `/` on 16-bit values become calls to __modsint and
- * __divsint, and lib/math.s leaves the result in HL while SDCC's generated
- * caller reads D and E - the same disagreement that file already documents and
- * works around for __mulint, applied to only one of the five.  (Its divide loop
- * also compares against the divisor's low byte alone, so a divisor of 400
- * divides by 144.) The previous time() implementation did not exercise this
- * conversion, so the day count had not been executed on the target before the
- * RTC-backed time and uptime paths were added.
+ * __divsint, and lib/math.s then left the result in HL while SDCC's generated
+ * caller reads D and E - the same disagreement that file already documents
+ * and works around for __mulint, applied to only one of the five.  (Its
+ * divide loop also compared against the divisor's low byte alone, so a
+ * divisor of 400 divided by 144, and __divuint refused any divisor of 256 or
+ * more.)  All four are fixed now - each writes the result to DE as well as
+ * HL - but that is no reason to go back to `/` and `%`: this routine's
+ * count-only form is the reason it is right, and the fixed helpers are the
+ * argument for not needing them rather than for using them.  The previous
+ * time() implementation did not exercise this conversion, so the day count
+ * had not been executed on the target before the RTC-backed time and uptime
+ * paths were added.
  *
  * So: no division, no modulo, and no multiply - only integer additions, which
  * SDCC expands correctly on this target (measured, and used by the arithmetic in

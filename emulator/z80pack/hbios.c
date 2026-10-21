@@ -283,8 +283,10 @@ bool z80pack_handle_hbios_mem(z80pack_t* pack, uint16_t addr)
     /* Check for known HBIOS memory-mapped calls */
     switch (addr) {
         case 0xFFE0:
-            /* Memory-mapped console output (RomWBW style) */
-            /* This is handled in z80_write_byte */
+            /* 0xFFE0 is inside the common-memory window ($FC00-$FFFF), which
+             * z80pack_z80_write_byte owns outright, so a memory-mapped console
+             * call never reaches here.  RomWBW console output is delivered
+             * through the HBIOS function path above and the SIO/UART ports. */
             return true;
             
         default:

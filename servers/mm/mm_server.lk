@@ -1,0 +1,15 @@
+; MM Server linker script
+-mjwx
+-b _CODE = 0x8000
+-i mm_server.ihx
+../../lib/server_crt0.rel
+mm_server.rel
+mm_service.rel
+mm_copy.rel
+mproc_model.rel
+../../lib/server.rel
+../../lib/math.rel
+../../lib/sdcc_runtime.rel
+../../lib/libc.rel
+../../lib/syscall.rel
+../../lib/user_syscall.rel

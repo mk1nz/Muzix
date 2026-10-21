@@ -32,6 +32,15 @@ int muzix_fs_directory_load(muzix_fs_block_cache_t *cache,
         uint8_t *entry = &data[slot * MUZIX_FS_DIR_ENTRY_SIZE];
         directory->entries[slot].inode = muzix_fs_dir_get16(entry);
         memcpy(directory->entries[slot].name, &entry[2], MUZIX_FS_NAME_MAX);
+        /* The on-disk entry is 14 name bytes with no length field, and a name
+         * of exactly 14 characters fills them all: there is nowhere to put a
+         * terminator, and dropping the fourteenth character would make such a
+         * name unmatchable.  So the copy stays verbatim and the readers are
+         * bounded instead - muzix_fs_directory_lookup() and
+         * muzix_fs_directory_remove() compare with
+         * strncmp(..., MUZIX_FS_NAME_MAX), and fs_service.c's rename ".."
+         * search does the same.  A shorter name is terminated by the NUL
+         * padding make_minixfs.rb writes behind it. */
     }
     return 0;
 }

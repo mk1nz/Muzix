@@ -1,0 +1,12 @@
+-mjwx
+-i z80test.ihx
+-b _CODE = 0x8000
+../lib/crt0.rel
+z80test.rel
+z80t_asm.rel
+../lib/math.rel
+../lib/sdcc_runtime.rel
+../lib/libc.rel
+../lib/syscall.rel
+../lib/user_syscall.rel
+-e
