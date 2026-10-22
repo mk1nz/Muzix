@@ -76,7 +76,7 @@ VERBOSE = ARGV.include?('--verbose')
 # there being a second chip model that can agree with the driver by
 # construction.  The rest of the emulator is a machine, not a module, and its
 # test_*.c files are unit tests of its own memory model built by emulator/Makefile.
-SOURCE_DIRS = %w[kernel fs mm pm platform/zeta-v2 test_host emulator lib].freeze
+SOURCE_DIRS = %w[kernel fs mm pm platform/zeta-v2 test_host emulator lib apps].freeze
 
 # lib/ joins the pool for lib/syscall.c ALONE, and the two exclusions below are
 # why.

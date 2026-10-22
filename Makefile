@@ -196,9 +196,9 @@ KERNEL_DEPS := $(addsuffix .d,$(KERNEL_C_MODULES))
 # Userspace objects keep their directory prefix
 LIBC_RELS    := lib/libc.rel lib/syscall.rel
 LIBC_S_RELS  := lib/user_syscall.rel lib/crt0.rel lib/math.rel lib/sdcc_runtime.rel lib/server.rel lib/z80_io.rel
-APPS_RELS    := apps/echo.rel apps/cat.rel apps/ls.rel apps/date.rel \
-               apps/top.rel apps/uptime.rel apps/loadavg.rel apps/hwdiag.rel \
-               apps/z80test.rel apps/z80t_asm.rel
+APPS_RELS    := apps/echo.rel apps/cat.rel apps/ls.rel apps/ls_time.rel \\\
+               apps/date.rel apps/top.rel apps/uptime.rel apps/loadavg.rel \\\
+               apps/hwdiag.rel apps/z80test.rel apps/z80t_asm.rel
 SHELL_RELS   := shell/shell.rel
 BOOT_RELS    := tools/bootloader.rel
 ROMBOOT_RELS := platform/zeta-v2/rom_boot.rel
@@ -381,7 +381,7 @@ apps/cat.ihx: apps/cat.rel apps/cat.lk $(LIBC_RELS) $(LIBC_S_RELS)
 	@echo "  link apps/cat"
 	@cd apps && $(SDLDZ80) -f cat.lk 2>&1 | grep -qi error && exit 1 || true
 
-apps/ls.ihx: apps/ls.rel apps/ls.lk $(LIBC_RELS) $(LIBC_S_RELS)
+apps/ls.ihx: apps/ls.rel apps/ls_time.rel apps/ls.lk $(LIBC_RELS) $(LIBC_S_RELS)
 	@echo "  link apps/ls"
 	@cd apps && $(SDLDZ80) -f ls.lk 2>&1 | grep -qi error && exit 1 || true
 

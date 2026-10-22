@@ -32,6 +32,7 @@
 
 #include "../lib/libc.h"
 #include "../lib/syscall.h"   /* sys_stat: the inode layout comes back through it */
+#include "ls_time.h"          /* format_epoch: date column for -l */
 
 /* The inode layout, from the kernel's own header rather than copied here.
  *
@@ -234,21 +235,23 @@ static void show(const char *dir, const struct dirent *entry, int long_fmt)
     put_mode(known ? info.mode : 0);
     putchar(' ');
     if (known) {
-        put_size(info.links, 2);
+        put_size(info.links, 3);
     } else {
         puts("  ?");
     }
     putchar(' ');
     if (known) {
-        put_size(info.size, 7);
+        put_size(info.size, 8);
     } else {
         puts("      ?");
     }
     putchar(' ');
     if (known) {
-        put_size(info.mtime, 10);
+        char timebuf[20];
+        format_epoch(info.mtime, timebuf);
+        printf("%s ", timebuf);
     } else {
-        puts("         ?");
+        puts("           ?");
     }
     putchar(' ');
     puts(entry->name);

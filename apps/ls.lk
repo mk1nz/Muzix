@@ -6,6 +6,7 @@
 ; silently overwrote _sys_times, _sys_signal and _sys_open at exec time.
 ../lib/crt0.rel
 ls.rel
+ls_time.rel
 ../lib/math.rel
 ../lib/sdcc_runtime.rel
 ../lib/libc.rel
