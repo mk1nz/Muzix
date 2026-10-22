@@ -16,7 +16,13 @@ output = ARGV.shift
 files = ARGV.each_slice(2).to_a
 abort "files must come in FILE NAME pairs" if files.any? { |f| f.length != 2 }
 
-build_time = Time.now.to_i
+# The filesystem stamps its entries with the build moment, and `ls` renders
+# that epoch as a date.  format_epoch treats the epoch as seconds since
+# 2000-01-01 00:00:00 and renders the resulting wall-clock time with no
+# timezone applied, so the epoch it is handed renders verbatim.  Time.now.to_i
+# is UTC epoch; to make `ls` show the HOST's local wall-clock time the stamp
+# has to carry the zone offset forward, not cancel it.
+build_time = Time.now.to_i - 946684800 + Time.now.utc_offset  # секунды с 2000-01-01, ЛОКАЛЬНОЕ время хоста
 $build_time = build_time
 
 BLOCK_SIZE = 512

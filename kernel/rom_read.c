@@ -253,12 +253,32 @@ static uint16_t rom_fs_lookup(uint16_t dir_inode, const char *name, uint8_t name
     for (i = 0; i < 32; i++) {
         uint8_t *entry = &dir_block[i * MUZIX_FS_DIR_ENTRY_SIZE];
         uint16_t entry_inode = (uint16_t)entry[0] | ((uint16_t)entry[1] << 8);
+        int j;
+
         if (entry_inode == 0) {
             continue;
         }
-        /* Bounded compare: check length match and content match */
-        if (strncmp((char*)&entry[2], name, name_len) == 0 &&
-            entry[2 + name_len] == 0) {
+        /* Bounded compare: MINIX-v1 packs the name into 14 bytes at
+         * entry[2] with no guaranteed NUL, so the length check has to stay
+         * inside those 14 bytes.  Reading entry[2 + name_len] directly is
+         * wrong the moment name_len hits 14: that byte is the next entry's
+         * inode low byte, so a name that exactly fills the field compared
+         * against whatever followed it.  copy-notes.txt is 14 characters and
+         * it used to match only because the entry after it was empty; a file
+         * placed there since then made the comparison fail.  Walk the
+         * remainder of the field and require it to be NUL. */
+        if (name_len > 14) {
+            continue;
+        }
+        if (strncmp((char*)&entry[2], name, name_len) != 0) {
+            continue;
+        }
+        for (j = name_len; j < 14; j++) {
+            if (entry[2 + j] != '\0') {
+                break;
+            }
+        }
+        if (j == 14) {
             return entry_inode;
         }
     }
@@ -373,13 +393,27 @@ uint16_t muzix_rom_resolve_inode(const char *path)
         for (i = 0; i < 32; i++) {
             uint8_t *entry = &dir_block[i * MUZIX_FS_DIR_ENTRY_SIZE];
             uint16_t entry_inode = (uint16_t)entry[0] | ((uint16_t)entry[1] << 8);
+            int j;
 
             if (entry_inode == 0) {
                 continue;
             }
-
-            if (strncmp((const char *)&entry[2], name, name_len) == 0 &&
-                ((const char *)&entry[2])[name_len] == '\0') {
+            /* Same NUL-padding rule as rom_fs_lookup: the on-disk name is
+             * 14 bytes with no guaranteed terminator, so checking
+             * entry[2 + name_len] reads the next entry's inode byte when
+             * name_len is 14.  Walk the rest of the field instead. */
+            if (name_len > 14) {
+                continue;
+            }
+            if (strncmp((const char *)&entry[2], name, name_len) != 0) {
+                continue;
+            }
+            for (j = name_len; j < 14; j++) {
+                if (entry[2 + j] != '\0') {
+                    break;
+                }
+            }
+            if (j == 14) {
                 found_inode = entry_inode;
                 break;
             }

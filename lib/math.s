@@ -36,13 +36,18 @@ __divuint:
     ld a,#16            ; A = iteration counter (dec a leaves the carry alone)
     or a                ; carry = 0: the first quotient bit shifted in is 0
 divuint_loop:
-    rl c
-    rl b                ; BC <<= 1; last iteration's quotient bit comes in at
-                        ; the bottom and the dividend's top bit leaves in the
-                        ; carry
-    add hl,hl           ; HL = (HL << 1) | that dividend bit
-    or a                ; clear the carry add hl,hl left behind
-    sbc hl,de           ; trial: remainder -= divisor
+        rl c
+        rl b                ; BC <<= 1; last iteration's quotient bit comes in at
+                            ; the bottom and the dividend's top bit leaves in the
+                            ; carry
+        push af             ; save the dividend bit that just left BC
+        add hl,hl           ; HL <<= 1
+        pop af              ; carry back: was that dividend bit a 1?
+        jr nc, divuint_shift_done
+        set 0, l            ; yes: HL = (HL << 1) | 1
+divuint_shift_done:
+        or a                ; clear the carry add hl,hl left behind
+        sbc hl,de           ; trial: remainder -= divisor
     jr c,divuint_borrow ; borrow: the divisor did not fit, undo it
     scf                 ; it fit: this quotient bit is 1
     jr divuint_next
@@ -146,11 +151,16 @@ __moduint:
     ld hl,#0            ; HL = running remainder
     ld a,#16
 moduint_loop:
-    rl c
-    rl b                ; dividend's top bit leaves in the carry
-    add hl,hl           ; remainder = (remainder << 1) | that bit
-    or a
-    sbc hl,de           ; trial: remainder -= divisor
+        rl c
+        rl b                ; dividend's top bit leaves in the carry
+        push af             ; save that dividend bit
+        add hl,hl           ; remainder <<= 1
+        pop af              ; carry back: was it a 1?
+        jr nc, moduint_shift_done
+        set 0, l            ; yes: remainder = (remainder << 1) | 1
+moduint_shift_done:
+        or a
+        sbc hl,de           ; trial: remainder -= divisor
     jr nc,moduint_next  ; no borrow: keep the subtraction
     add hl,de           ; borrow: undo it
 moduint_next:
