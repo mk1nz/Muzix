@@ -74,6 +74,8 @@
  */
 
 #include "../lib/libc.h"
+#include "../lib/lcd.h"
+#include "../lib/i2c.h"
 
 /* Output goes through a line buffer rather than putchar().
  *
@@ -90,29 +92,29 @@ static int used;
 
 static void out_flush(void);
 
-static void out(char c)
-{
+static void
+out(char c) {
     if (used >= (int)sizeof(line)) {
         out_flush();
     }
     line[used++] = c;
 }
 
-static void out_str(const char *s)
-{
+static void
+out_str(const char *s) {
     while (*s) {
         out(*s++);
     }
 }
 
-static void out_end(void)
-{
+static void
+out_end(void) {
     out('\n');
     out_flush();
 }
 
-static void out_flush(void)
-{
+static void
+out_flush(void) {
     if (used != 0) {
         write(1, line, (size_t)used);
         used = 0;
@@ -219,8 +221,8 @@ static void out_number(int32_t value)
     *second = (int)seconds;
 }
 
-static void print_elapsed(int32_t seconds)
-{
+static void
+print_elapsed(int32_t seconds) {
     int32_t days;
     int hour;
     int minute;
@@ -275,14 +277,14 @@ static void print_since(const struct rtc_time *t)
  * reason date.c prints them. */
 static const char HEXDIGITS[16] = "0123456789abcdef";
 
-static void outhex2(int value)
-{
+static void
+outhex2(int value) {
     out(HEXDIGITS[(value >> 4) & 0x0F]);
     out(HEXDIGITS[value & 0x0F]);
 }
 
-static void report_chip_bytes(const struct rtc_time *t)
-{
+static void
+report_chip_bytes(const struct rtc_time *t) {
     out_str("uptime: cannot read the clock; chip sent sec=");
     outhex2(t->second);
     out_str(" min=");
@@ -292,17 +294,22 @@ static void report_chip_bytes(const struct rtc_time *t)
     out_end();
 }
 
-int main(int argc, char *argv[])
-{
+int
+main(int argc, char *argv[]) {
     int32_t seconds;
     struct rtc_time now;
     struct rtc_time boot;
+    int lcd_mode = 0;
 
     if (argc > 1) {
-        out_str("usage: ");
-        out_str(argv[0]);
-        out_end();
-        return 1;
+        if (strcmp(argv[1], "-d") == 0) {
+            lcd_mode = 1;
+        } else {
+            out_str("usage: ");
+            out_str(argv[0]);
+            out_end();
+            return 1;
+        }
     }
 
     /* Read both ends of the subtraction in one call, so the two cannot come from
@@ -344,6 +351,23 @@ int main(int argc, char *argv[])
         out_end();
         print_since(&boot);
         return 1;
+    }
+
+    if (lcd_mode) {
+        int32_t days;
+        int hour, minute, second;
+        lcd_init();
+        lcd_clear();
+        split(seconds, &days, &hour, &minute, &second);
+        lcd_print("up ");
+        lcd_print_uint_padded((unsigned int)days, 2);
+        lcd_print("d ");
+        lcd_print_uint_padded((unsigned int)hour, 2);
+        lcd_print(":");
+        lcd_print_uint_padded((unsigned int)minute, 2);
+        lcd_print(":");
+        lcd_print_uint_padded((unsigned int)second, 2);
+        return 0;
     }
 
     print_elapsed(seconds);

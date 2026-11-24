@@ -9,7 +9,9 @@ ls.rel
 ls_time.rel
 ../lib/math.rel
 ../lib/sdcc_runtime.rel
-../lib/libc.rel
-../lib/syscall.rel
+-k ../lib
+-l libc.lib
+-k ../lib
+-l syscall.lib
 ../lib/user_syscall.rel
 -e

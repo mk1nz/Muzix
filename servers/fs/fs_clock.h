@@ -4,7 +4,7 @@
 #ifndef MUZIX_FS_CLOCK_H
 #define MUZIX_FS_CLOCK_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 /* Advances the FS server's progress counter.  Called once per dispatched
  * request from fs_server.c's fs_server_handle() - the loop itself is

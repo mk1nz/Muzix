@@ -1,7 +1,7 @@
 #include "directory.h"
 
-static int test_directory(void)
-{
+static int
+test_directory(void) {
     muzix_fs_directory_t directory;
     uint16_t inode;
 
@@ -24,7 +24,7 @@ static int test_directory(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_directory();
 }

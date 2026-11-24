@@ -120,3 +120,142 @@ Then launch it from the emulator directory:
 cd emulator
 ./z80pack-emu -s muzix ../build/muzix-zeta-v2.rom -r -i
 ```
+
+## Hardware Peripheral Connections (Zeta SBC V2)
+
+Muzix uses the Zeta SBC V2 PPI (8255A / КР580ВВ55А clone at I/O ports
+0x60–0x63) for bit-bang I²C and SPI. The following tables are derived from the
+official Zeta SBC V2 KiCad schematic (files/Zeta SBC V2 - KiCad - 2.0.zip,
+netlist `Z80-SBC.net`) and verified against the Muzix production source
+(`platform/zeta-v2/spi_io.c`, `platform/zeta-v2/w5100.c`, `lib/i2c.c`,
+`lib/i2c.h`).
+
+### Zeta SBC V2 Connectors
+
+| Connector | Type | Function |
+|-----------|------|----------|
+| P1 | CONN_3 (3-pin) | Power input (+5V, GND, CONFIG jumper) |
+| P2 | CONN_2 | Reset button |
+| P3 | CONN_DE9 (DB9 male) | Serial console (UART, 38400 baud 8N1) |
+| P4 | CONN_13X2 | Parallel port (PPI lines for I²C and SPI) |
+| P5 | CONN_17X2 | Floppy disk (WD37C65 FDC) |
+| P6 | CONN_2 | 5V power output |
+
+### Power (P1)
+
+| P1 pin | Signal | Description |
+|--------|--------|-------------|
+| 1 | VCC | +5V power input (center positive) |
+| 2 | CONFIG | Jumper JP1 pin 1 (configuration) |
+| 3 | GND | Ground |
+
+### Serial Console (P3, DB9)
+
+| P3 pin | Signal | Muzix usage |
+|--------|--------|-------------|
+| 1 | — | Not used by Muzix |
+| 2 | /RX | UART receive (console input) |
+| 3 | /TX | UART transmit (console output) |
+| 4 | — | Not used by Muzix |
+| 5 | GND | Ground |
+| 6 | — | Not used by Muzix |
+| 7 | /RTS | UART RTS (flow control) |
+| 8 | /CTS | UART CTS (flow control) |
+| 9 | — | Not used by Muzix |
+
+Baud rate is 38400, 8N1. UART clock divider is configured at boot via
+`muzix_zeta_uart_init()` (`platform/zeta-v2/uart_io.s`).
+
+### I²C Display (PCF8574 LCD adapter via PPI Port C)
+
+The I²C bus is bit-banged on PPI Port C. The PCF8574 I²C address is `0x4E`
+(7-bit). Standard Chinese "blue" I²C LCD adapter pin mapping:
+RS=P0, RW=P1 (unused), E=P2, Backlight=P3, D4-D7=P4-P7.
+
+| Signal | PPI line | PPI port/bit | U5 pin | P4 pin | Notes |
+|--------|----------|--------------|--------|--------|-------|
+| SDA | PC0 | Port C, bit 0 | 14 | 1 | Bidirectional, open-drain, pull-up to VCC |
+| SCL | PC4 | Port C, bit 4 | 13 | 9 | Output, pull-up to VCC |
+
+PPI control register (0x63):
+- `0x90` — Port C lower OUTPUT (SDA driving), Port C upper OUTPUT (SCL output)
+- `0x91` — Port C lower INPUT (SDA released for ACK sampling), Port C upper OUTPUT
+
+I²C timing: Standard mode (~100 kHz), tLOW ≥ 4.7 µs, tHIGH ≥ 4.0 µs.
+КР580ВВ55А settling: 2 NOPs (~500 ns) after each port write.
+
+Source: `lib/i2c.c`, `lib/i2c.h`, `platform/zeta-v2/spi_io.c` (comment block).
+
+### W5100 Ethernet Controller (via SPI via PPI)
+
+The W5100 is accessed via SPI bit-bang on PPI Ports A and C. The SPI driver
+uses `muzix_zeta_spi_*` functions (`platform/zeta-v2/spi_io.c`).
+
+| Signal | PPI line | PPI port/bit | U5 pin | P4 pin | Polarity |
+|--------|----------|--------------|--------|--------|----------|
+| SPI_CLK | PC5 | Port C, bit 5 | 12 | 11 | Output |
+| SPI_MOSI | PC6 | Port C, bit 6 | 11 | 13 | Output |
+| SPI_CS_N | PC7 | Port C, bit 7 | 10 | 15 | Output, active low |
+| SPI_MISO | PA0 | Port A, bit 0 | 4 | 2 | Input |
+
+PPI control register (0x63): `0x90` — Port A INPUT (MISO), Port C upper OUTPUT
+(CLK/MOSI/CS), Port C lower OUTPUT.
+
+SPI timing: SCLK ≤ 25 kHz, tHIGH ≥ 20 µs, tLOW ≥ 20 µs. Frequency-compensating
+delay is inserted at 20 MHz CPU to meet the minimum half-period.
+
+W5100 SPI opcodes: WRITE = 0xF0, READ = 0x0F. Chip select is active low
+(asserted low during transaction).
+
+Source: `platform/zeta-v2/spi_io.c`, `platform/zeta-v2/w5100.c`,
+`platform/zeta-v2/w5100.h`.
+
+### P4 Parallel Port Pinout (Complete)
+
+All PPI lines are routed to P4 (CONN_13X2). Pins not listed below are not
+connected in the Zeta SBC V2 schematic.
+
+| P4 pin | Signal | PPI line | U5 pin | Muzix usage |
+|--------|--------|----------|--------|-------------|
+| 1 | PC0 (SDA) | Port C, bit 0 | 14 | I²C SDA |
+| 2 | PA0 (MISO) | Port A, bit 0 | 4 | SPI MISO |
+| 3 | PA1 | Port A, bit 1 | 3 | — |
+| 4 | PA2 | Port A, bit 2 | 2 | — |
+| 5 | PC2 | Port C, bit 2 | 16 | — |
+| 6 | PA3 | Port A, bit 3 | 1 | — |
+| 7 | PC3 | Port C, bit 3 | 17 | — |
+| 8 | PA4 | Port A, bit 4 | 40 | — |
+| 9 | PC4 (SCL) | Port C, bit 4 | 13 | I²C SCL |
+| 10 | PA5 | Port A, bit 5 | 39 | — |
+| 11 | PC5 (CLK) | Port C, bit 5 | 12 | SPI CLK |
+| 12 | PA6 | Port A, bit 6 | 38 | — |
+| 13 | PC6 (MOSI) | Port C, bit 6 | 11 | SPI MOSI |
+| 14 | PA7 | Port A, bit 7 | 37 | — |
+| 15 | PC7 (CS_N) | Port C, bit 7 | 10 | SPI CS (active low) |
+| 16 | — | — | — | Not connected |
+| 17 | PB7 | Port B, bit 7 | 25 | — |
+| 18 | — | — | — | Not connected |
+| 19 | PB6 | Port B, bit 6 | 24 | — |
+| 20 | — | — | — | Not connected |
+| 21 | PB5 | Port B, bit 5 | 23 | — |
+| 22 | — | — | — | Not connected |
+| 23 | PB4 | Port B, bit 4 | 22 | — |
+| 24 | PB3 | Port B, bit 3 | 21 | — |
+| 25 | PAR_VCC | — | — | Power (+5V via JP2) |
+
+### Notes
+
+- The PPI (8255A / КР580ВВ55А) control register is **write-only**; Muzix
+  saves the shadow state in `_DATA` and never reads back the port registers.
+- I²C SDA (PC0) switches between OUTPUT (driving) and INPUT (ACK sampling)
+  by changing the PPI control word (`0x90` ↔ `0x91`). SCL (PC4) remains OUTPUT
+  at all times.
+- W5100 chip select (PC7) is active low. The SPI driver asserts CS low before
+  each transaction and deasserts it after.
+- No separate W5500 support; Muzix uses W5100 only. Do not substitute W5500
+  without modifying the SPI protocol handling.
+- Physical pin numbers for P4 are from the Zeta SBC V2 KiCad schematic
+  (`Z80-SBC.net` netlist in `files/Zeta SBC V2 - KiCad - 2.0.zip`).
+  Schematic PDF: `files/Zeta SBC V2 - Schematic - Color - 2.0.pdf`.
+- Repository: https://github.com/skiselev/zeta_sbc
+

@@ -1,7 +1,7 @@
 #ifndef MUZIX_RUNTIME_STATE_H
 #define MUZIX_RUNTIME_STATE_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../mm/mproc_model.h"
 #include "../mm/mm_service.h"

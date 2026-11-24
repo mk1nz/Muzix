@@ -1,7 +1,7 @@
 #ifndef MUZIX_ZETA_UART_H
 #define MUZIX_ZETA_UART_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 void muzix_zeta_uart_init(void);
 

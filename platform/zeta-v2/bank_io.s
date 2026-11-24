@@ -78,6 +78,27 @@ _muzix_zeta_ldir_staged:
     ldir
     ret
 
+; Staging words for LDIR-based copies. These MUST be in _DATA, not _CODE:
+;
+; 1. They are written by copy callbacks in context_switch.c while a temp map
+;    is installed. A temp map keeps window 3 as the kernel page (0x23), so
+;    _DATA — which lives in window 3 — is the only area that stays reachable
+;    across the switch.  .area _CODE would put them in window 0, which is
+;    still kernel page 0x20 during a temp map, but the comments in
+;    context_switch.c (e.g. "staging words in _DATA", "staging buffer is in
+;    _DATA, which is in window 2") assume they are in _DATA.
+;
+; 2. If they are left in _CODE, a z80pack_update_visible_ram() refresh after
+;    a bank write copies from ram[] into visible_ram[0x0DB5..0x0DB9], but
+;    writes to those addresses during a temp map with a non-kernel window 0
+;    land in the process's page, not kernel RAM.  The staging words then
+;    read back as 0xFC00 (common_mem's base), triggering the LDI debug in
+;    the emulator and corrupting the copy destination.
+;
+; This was the root cause of the 0xFC00 corruption: staging words in _CODE
+; (0x0DB7) read as 0xFC00 because _DATA was not the area backing them.
+.area _DATA
+
 _muzix_zeta_staged_src:
     .dw #0
 _muzix_zeta_staged_dst:

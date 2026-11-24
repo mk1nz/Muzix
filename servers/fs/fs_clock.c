@@ -32,12 +32,12 @@
 
 uint16_t muzix_tick_count;
 
-void muzix_clock_tick(void)
-{
+void
+muzix_clock_tick(void) {
     muzix_tick_count = (uint16_t)(muzix_tick_count + 1u);
 }
 
-uint16_t muzix_tick_now(void)
-{
+uint16_t
+muzix_tick_now(void) {
     return muzix_tick_count;
 }

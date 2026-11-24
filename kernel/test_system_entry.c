@@ -1,7 +1,7 @@
 #include "system_entry.h"
 
-static int test_system_entry(void)
-{
+static int
+test_system_entry(void) {
     muzix_system_entry_t sys;
     process_map_t kernel_map = {{7, 7, 7, 7}};
     process_map_t init_map = {{1, 2, 3, 3}};
@@ -24,7 +24,7 @@ static int test_system_entry(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_system_entry();
 }

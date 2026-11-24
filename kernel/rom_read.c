@@ -1,5 +1,5 @@
-#include <stdint.h>
-#include <string.h>
+#include "ztypes.h"
+#include "libc.h"
 
 #include "../platform/zeta-v2/test_kernel/bank_model.h"
 #include "../fs/block_device.h"
@@ -38,25 +38,20 @@
 #define MUZIX_ROMFS_WINDOW_ADDR 0x4000u
 #define MUZIX_ROMFS_BANK_SIZE   0x4000u
 
-int rom_read_block(struct muzix_block_device *device, uint16_t block, uint8_t *buffer)
-{
+int
+rom_read_block(struct muzix_block_device *device, uint16_t block, uint8_t *buffer) {
     uint32_t rom_offset;
     uint8_t page;
     uint16_t offset;
     muzix_mm_service_t *mm;
 
-    if (!device || !buffer) {
-        return -1;
-    }
-
+    if (!device || !buffer) return -1;
 
     /* The block count is the device's, not a constant: hardcoding 66 here
      * silently limited a differently sized ROMFS image while claiming to read
      * every block the volume described, so a read past the real end returned
      * image bytes from beyond the filesystem. */
-    if (device->block_count == 0 || block >= device->block_count) {
-        return -1;
-    }
+    if (device->block_count == 0 || block >= device->block_count) return -1;
 
     mm = device->context ? (muzix_mm_service_t *)device->context : 0;
 
@@ -65,16 +60,11 @@ int rom_read_block(struct muzix_block_device *device, uint16_t block, uint8_t *b
     page = (uint8_t)(rom_offset / MUZIX_ROMFS_BANK_SIZE);
     offset = (uint16_t)(rom_offset % MUZIX_ROMFS_BANK_SIZE);
 
-
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     int result = muzix_mm_copy_rom_page_to_kernel(mm, page,
                                                   offset, buffer,
                                                   MUZIX_FS_BLOCK_SIZE);
-    if (result != 0) {
-        return -1;
-    }
+    if (result != 0) return -1;
     return 0;
 }
 
@@ -104,15 +94,13 @@ int rom_read_block(struct muzix_block_device *device, uint16_t block, uint8_t *b
  * early boot exec_loader lives above window 0 and cannot call the primitive that
  * changes a map, while this module is linked fourth in KERNEL_LINK_ORDER and so
  * sits below 0x4000. */
-int muzix_boot_copy_kernel_to_user(struct muzix_mm_service *mm,
-                                     const void *dst_map,
-                                     uint16_t user_addr,
-                                     const uint8_t *src,
-                                     size_t len)
-{
-    if (!mm || !dst_map || !src || len == 0) {
-        return -1;
-    }
+int
+muzix_boot_copy_kernel_to_user(struct muzix_mm_service *mm,
+                               const void *dst_map,
+                               uint16_t user_addr,
+                               const uint8_t *src,
+                               size_t len) {
+    if (!mm || !dst_map || !src || len == 0) return -1;
 
     /* One path for every window.  The MM entry point refuses a request longer
      * than its staging buffer (MUZIX_ZETA_COPY_STAGING) or one that would run
@@ -204,60 +192,48 @@ static uint32_t g_rom_fd_pos[MUZIX_ROM_FD_SLOTS];
  * disagree about nothing but would drift if they could: the inode table is
  * blocks 3-4 (16 inodes per 512-byte block, 32 bytes per inode), the root
  * directory is inode 1, and an inode's first zone is at byte offset 14. */
-static int rom_fs_read_block(uint16_t block, uint8_t *buffer)
-{
+static int
+rom_fs_read_block(uint16_t block, uint8_t *buffer) {
     return rom_read_block(&g_block_dev, block, buffer);
 }
 
 /* Read an inode by number into a caller-provided 32-byte buffer. */
-static int rom_fs_get_inode(uint16_t inode_num, uint8_t *inode_out)
-{
+static int
+rom_fs_get_inode(uint16_t inode_num, uint8_t *inode_out) {
     uint8_t block_buf[512];
     uint16_t block = (inode_num * MUZIX_FS_INODE_SIZE) / MUZIX_FS_BLOCK_SIZE;
     uint16_t off = (inode_num * MUZIX_FS_INODE_SIZE) % MUZIX_FS_BLOCK_SIZE;
-    if (rom_fs_read_block((uint16_t)(3 + block), block_buf) != 0) {
-        return -1;
-    }
+    if (rom_fs_read_block((uint16_t)(3 + block), block_buf) != 0) return -1;
     memcpy(inode_out, &block_buf[off], MUZIX_FS_INODE_SIZE);
     return 0;
 }
 
 /* Read the data zone (directory block) for an inode into the caller's buffer. */
-static int rom_fs_read_dir_block(uint16_t inode_num, uint8_t *buf)
-{
+static int
+rom_fs_read_dir_block(uint16_t inode_num, uint8_t *buf) {
     uint8_t inode_buf[32];
     uint16_t zone;
 
-    if (rom_fs_get_inode(inode_num, inode_buf) != 0) {
-        return -1;
-    }
+    if (rom_fs_get_inode(inode_num, inode_buf) != 0) return -1;
     zone = (uint16_t)inode_buf[14] | ((uint16_t)inode_buf[15] << 8);
-    if (zone == 0) {
-        return -1;
-    }
+    if (zone == 0) return -1;
     return rom_fs_read_block(zone, buf);
 }
 
 /* Look up a name in a directory inode, returning the entry inode or 0. */
-static uint16_t rom_fs_lookup(uint16_t dir_inode, const char *name, uint8_t name_len)
-{
+static uint16_t
+rom_fs_lookup(uint16_t dir_inode, const char *name, uint8_t name_len) {
     uint8_t dir_block[512];
     int i;
 
-    if (name_len == 0) {
-        return 0;
-    }
-    if (rom_fs_read_dir_block(dir_inode, dir_block) != 0) {
-        return 0;
-    }
+    if (name_len == 0) return 0;
+    if (rom_fs_read_dir_block(dir_inode, dir_block) != 0) return 0;
     for (i = 0; i < 32; i++) {
         uint8_t *entry = &dir_block[i * MUZIX_FS_DIR_ENTRY_SIZE];
         uint16_t entry_inode = (uint16_t)entry[0] | ((uint16_t)entry[1] << 8);
         int j;
 
-        if (entry_inode == 0) {
-            continue;
-        }
+        if (entry_inode == 0) continue;
         /* Bounded compare: MINIX-v1 packs the name into 14 bytes at
          * entry[2] with no guaranteed NUL, so the length check has to stay
          * inside those 14 bytes.  Reading entry[2 + name_len] directly is
@@ -267,46 +243,36 @@ static uint16_t rom_fs_lookup(uint16_t dir_inode, const char *name, uint8_t name
          * it used to match only because the entry after it was empty; a file
          * placed there since then made the comparison fail.  Walk the
          * remainder of the field and require it to be NUL. */
-        if (name_len > 14) {
-            continue;
-        }
-        if (strncmp((char*)&entry[2], name, name_len) != 0) {
-            continue;
-        }
+        if (name_len > 14) continue;
+        if (strncmp((char*)&entry[2], name, name_len) != 0) continue;
         for (j = name_len; j < 14; j++) {
-            if (entry[2 + j] != '\0') {
-                break;
-            }
+            if (entry[2 + j] != '\0') break;
         }
-        if (j == 14) {
-            return entry_inode;
-        }
+        if (j == 14) return entry_inode;
     }
     return 0;
 }
 
 /* Read the root directory's first block into the caller's 512-byte buffer. */
-static int rom_fs_root_dir(uint8_t *block)
-{
+static int
+rom_fs_root_dir(uint8_t *block) {
     return rom_fs_read_dir_block((uint16_t)MUZIX_FS_ROOT_INODE, block);
 }
 
-int muzix_rom_fd_is_synthetic(int fd)
-{
+int
+muzix_rom_fd_is_synthetic(int fd) {
     int inode = fd - MUZIX_ROM_FD_BASE;
     return inode >= MUZIX_FS_ROOT_INODE && inode <= 31;
 }
 
 /* Resolve a path in the ROM filesystem.  Supports /bin and /sbin directories.
  * Returns a synthetic descriptor or -1. */
-int muzix_rom_open_path(const char *path)
-{
+int
+muzix_rom_open_path(const char *path) {
     uint16_t current_inode = MUZIX_FS_ROOT_INODE;
     const char *p = path;
 
-    if (!path) {
-        return -1;
-    }
+    if (!path) return -1;
 
     /* Skip leading slashes */
     while (*p == '/') {
@@ -331,9 +297,7 @@ int muzix_rom_open_path(const char *path)
 
         /* Look up this component */
         uint16_t next_inode = rom_fs_lookup(current_inode, comp_start, comp_len);
-        if (next_inode == 0) {
-            return -1;
-        }
+        if (next_inode == 0) return -1;
         current_inode = next_inode;
 
         /* Skip trailing slashes */
@@ -348,14 +312,12 @@ int muzix_rom_open_path(const char *path)
 
 /* Walk a path to its inode number (the caller can then read the inode).
  * Returns the inode number, or 0 on failure. */
-uint16_t muzix_rom_resolve_inode(const char *path)
-{
+uint16_t
+muzix_rom_resolve_inode(const char *path) {
     uint16_t current_inode = MUZIX_FS_ROOT_INODE;
     const char *p = path;
 
-    if (!path) {
-        return 0;
-    }
+    if (!path) return 0;
 
     while (*p == '/') {
         p++;
@@ -382,36 +344,24 @@ uint16_t muzix_rom_resolve_inode(const char *path)
             p++;
         }
 
-        if (name_len == 0) {
-            continue;
-        }
+        if (name_len == 0) continue;
 
-        if (rom_fs_read_dir_block(current_inode, dir_block) != 0) {
-            return 0;
-        }
+        if (rom_fs_read_dir_block(current_inode, dir_block) != 0) return 0;
 
         for (i = 0; i < 32; i++) {
             uint8_t *entry = &dir_block[i * MUZIX_FS_DIR_ENTRY_SIZE];
             uint16_t entry_inode = (uint16_t)entry[0] | ((uint16_t)entry[1] << 8);
             int j;
 
-            if (entry_inode == 0) {
-                continue;
-            }
+            if (entry_inode == 0) continue;
             /* Same NUL-padding rule as rom_fs_lookup: the on-disk name is
              * 14 bytes with no guaranteed terminator, so checking
              * entry[2 + name_len] reads the next entry's inode byte when
              * name_len is 14.  Walk the rest of the field instead. */
-            if (name_len > 14) {
-                continue;
-            }
-            if (strncmp((const char *)&entry[2], name, name_len) != 0) {
-                continue;
-            }
+            if (name_len > 14) continue;
+            if (strncmp((const char *)&entry[2], name, name_len) != 0) continue;
             for (j = name_len; j < 14; j++) {
-                if (entry[2 + j] != '\0') {
-                    break;
-                }
+                if (entry[2 + j] != '\0') break;
             }
             if (j == 14) {
                 found_inode = entry_inode;
@@ -419,9 +369,7 @@ uint16_t muzix_rom_resolve_inode(const char *path)
             }
         }
 
-        if (found_inode == 0) {
-            return 0;
-        }
+        if (found_inode == 0) return 0;
 
         current_inode = found_inode;
     }
@@ -430,22 +378,18 @@ uint16_t muzix_rom_resolve_inode(const char *path)
 }
 
 /* Look up a path's inode and copy the raw 32-byte inode data into the caller's buffer. */
-int muzix_rom_lookup_inode(const char *path, uint8_t *inode_out)
-{
+int
+muzix_rom_lookup_inode(const char *path, uint8_t *inode_out) {
     uint16_t inode_num = muzix_rom_resolve_inode(path);
-    if (inode_num == 0) {
-        return -1;
-    }
+    if (inode_num == 0) return -1;
     return rom_fs_get_inode(inode_num, inode_out);
 }
 
 /* Copy the inode for a synthetic fd into the caller's 32-byte buffer. */
-int muzix_rom_fstat(int fd, uint8_t *inode_out)
-{
+int
+muzix_rom_fstat(int fd, uint8_t *inode_out) {
     int inode = fd - MUZIX_ROM_FD_BASE;
-    if (inode < MUZIX_FS_ROOT_INODE || inode > 31) {
-        return -1;
-    }
+    if (inode < MUZIX_FS_ROOT_INODE || inode > 31) return -1;
     return rom_fs_get_inode((uint16_t)inode, inode_out);
 }
 
@@ -453,32 +397,24 @@ int muzix_rom_fstat(int fd, uint8_t *inode_out)
  * index counts entries the way the fs/ service layer's walk does, and 0/1/-1
  * are the same three answers its readdir gives: entry filled, past the end,
  * error. */
-int muzix_rom_readdir(int fd, uint16_t index, uint8_t *entry_out)
-{
+int
+muzix_rom_readdir(int fd, uint16_t index, uint8_t *entry_out) {
     int inode = fd - MUZIX_ROM_FD_BASE;
     uint16_t seen = 0;
     int i;
     uint8_t dir_block[512];
 
-    if (!entry_out || !muzix_rom_fd_is_synthetic(fd)) {
-        return -1;
-    }
+    if (!entry_out || !muzix_rom_fd_is_synthetic(fd)) return -1;
     if (inode != MUZIX_FS_ROOT_INODE) {
         /* Reading a subdirectory: read its data block */
-        if (rom_fs_read_dir_block((uint16_t)inode, dir_block) != 0) {
-            return -1;
-        }
+        if (rom_fs_read_dir_block((uint16_t)inode, dir_block) != 0) return -1;
     } else {
-        if (rom_fs_root_dir(dir_block) != 0) {
-            return -1;
-        }
+        if (rom_fs_root_dir(dir_block) != 0) return -1;
     }
     for (i = 0; i < 32; i++) {
         uint8_t *entry = &dir_block[i * MUZIX_FS_DIR_ENTRY_SIZE];
 
-        if (((uint16_t)entry[0] | ((uint16_t)entry[1] << 8)) == 0) {
-            continue;
-        }
+        if (((uint16_t)entry[0] | ((uint16_t)entry[1] << 8)) == 0) continue;
         if (seen == index) {
             /* MINIX-v1 directory entries have no terminating NUL in the 14-byte
              * name; the userspace struct dirent gives name[] one extra byte so a
@@ -497,17 +433,13 @@ int muzix_rom_readdir(int fd, uint16_t index, uint8_t *entry_out)
  * the syscall layer is given: 0 (set) is the only one the ROM filesystem
  * needs, and anything else is answered as "set" because there is no other
  * origin a flat image has. */
-int muzix_rom_seek(int fd, uint32_t offset, int whence)
-{
+int
+muzix_rom_seek(int fd, uint32_t offset, int whence) {
     int inode;
 
-    if (!muzix_rom_fd_is_synthetic(fd)) {
-        return -1;
-    }
+    if (!muzix_rom_fd_is_synthetic(fd)) return -1;
     inode = fd - MUZIX_ROM_FD_BASE;
-    if (offset > 0xFFFFu) {
-        offset = 0xFFFFu;
-    }
+    if (offset > 0xFFFFu) offset = 0xFFFFu;
     (void)whence;
     g_rom_fd_pos[inode] = offset;
     return 0;
@@ -524,8 +456,8 @@ int muzix_rom_seek(int fd, uint32_t offset, int whence)
  * zones in the inode, one indirect block holding 256 more, 512 bytes each.
  * The inode is parsed into locals first so that g_rom_fs_block can carry the
  * data blocks afterwards. */
-int muzix_rom_read(int fd, uint8_t *buffer, uint16_t count)
-{
+int
+muzix_rom_read(int fd, uint8_t *buffer, uint16_t count) {
     int inode;
     uint8_t *inode_entry;
     uint32_t file_size;
@@ -536,18 +468,14 @@ int muzix_rom_read(int fd, uint8_t *buffer, uint16_t count)
     uint32_t pos;
     uint16_t done = 0;
 
-    if (!buffer || !muzix_rom_fd_is_synthetic(fd)) {
-        return -1;
-    }
+    if (!buffer || !muzix_rom_fd_is_synthetic(fd)) return -1;
     inode = fd - MUZIX_ROM_FD_BASE;
     if (inode == MUZIX_FS_ROOT_INODE) {
         /* The one directory in the image is not a readable file. */
         return -1;
     }
 
-    if (rom_fs_read_block((uint16_t)(3 + (inode >> 4)), g_rom_fs_block) != 0) {
-        return -1;
-    }
+    if (rom_fs_read_block((uint16_t)(3 + (inode >> 4)), g_rom_fs_block) != 0) return -1;
     inode_entry = &g_rom_fs_block[(inode & 0x0F) * 32];
     file_size = (uint32_t)inode_entry[4]
               | ((uint32_t)inode_entry[5] << 8)
@@ -560,9 +488,7 @@ int muzix_rom_read(int fd, uint8_t *buffer, uint16_t count)
     indirect_zone = (uint16_t)inode_entry[28] | ((uint16_t)inode_entry[29] << 8);
 
     pos = g_rom_fd_pos[inode];
-    if (pos >= file_size) {
-        return 0;
-    }
+    if (pos >= file_size) return 0;
     if ((uint32_t)count > file_size - pos) {
         count = (uint16_t)(file_size - pos);
     }
@@ -591,14 +517,10 @@ int muzix_rom_read(int fd, uint8_t *buffer, uint16_t count)
                 have_indirect = 1;
             }
             zone_index -= MUZIX_ROM_DIRECT_ZONES;
-            if (zone_index >= MUZIX_ROM_INDIRECT_SLOTS) {
-                break;
-            }
+            if (zone_index >= MUZIX_ROM_INDIRECT_SLOTS) break;
             zone = indirect_zones[zone_index];
         }
-        if (zone == 0) {
-            break;
-        }
+        if (zone == 0) break;
         if (rom_fs_read_block(zone, g_rom_fs_block) != 0) {
             return (done > 0) ? (int)done : -1;
         }

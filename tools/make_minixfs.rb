@@ -26,12 +26,10 @@ build_time = Time.now.to_i - 946684800 + Time.now.utc_offset  # секунды �
 $build_time = build_time
 
 BLOCK_SIZE = 512
-# Must match MUZIX_FS_INODE_SLOTS in fs/inode_table.h. Slot 0 is never handed
-# out while slot 1 is the root, so inode capacity must include those two slots.
-# The kernel has its own matching ceiling: each slot is a 32-byte record inside
-# g_volume, the 512-byte inode block would hold sixteen, and the stack-headroom
-# gate is what stops short of it - see MUZIX_FS_INODE_SLOTS for the measurement.
-MAX_INODES = 32
+INODE_TABLE_BLOCKS = 3
+# Must match MUZIX_FS_INODE_TABLE_BLOCKS in fs/inode_table.h (3 blocks x 16
+# slots = 48 records) and MUZIX_FS_MAX_INODES in fs/fs_types.h.
+MAX_INODES = 48
 # 384 KiB of ROMFS, which is what the device actually has: the kernel configures
 # its ROM block device for 768 blocks (kernel/rom_read.h MUZIX_ROMFS_BLOCK_COUNT),
 # and tools/make_zeta_rom.sh lays the image at 0x20000 in a 512 KiB part.  This
@@ -45,9 +43,7 @@ INODE_DISK_SIZE = 32
 DIR_ENTRY_SIZE = 16
 ROOT_INODE = 1
 
-# The inode table needs 16 * 32 = 512 bytes = 1 block (512 bytes).
-# But we reserve 2 blocks to match the existing layout and allow growth.
-INODE_TABLE_BLOCKS = 2
+# The inode table is INODE_TABLE_BLOCKS blocks (3 x 512 bytes = 1536 bytes).
 INODE_TABLE_OFFSET = 3 * BLOCK_SIZE  # Block 3 and 4
 ROOT_DIR_BLOCK = INODE_TABLE_OFFSET / BLOCK_SIZE + INODE_TABLE_BLOCKS  # Block 5
 FIRST_DATA_ZONE = ROOT_DIR_BLOCK + 1  # Block 6

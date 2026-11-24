@@ -18,9 +18,9 @@ MINIX_MAGIC = 0x137f
 # claims and for its data being present at all.
 #
 # The Makefile's make_minixfs.rb call puts files in the image - readme.txt,
-# hw-notes.txt, copy-notes.txt, echo, cat, ls, date, top, uptime, loadavg, hwdiag,
-# z80test, shell, fs_server, mm_server, pm_server - and the directories
-# holds all fifteen,
+# hw-notes.txt, copy-notes.txt (all in /doc only), echo, cat, ls, date, top,
+# uptime, loadavg, hwdiag, z80test, shell, fs_server, mm_server, pm_server -
+# and the directories hold them.
 # but the loop below walks EXPECTED_FILES and not the directory, so a truncated
 # or misplaced user command, which
 # is exactly the failure a filesystem running out of room produces, must not
@@ -49,17 +49,24 @@ EXPECTED_FILES = [
   ["uptime",    "/bin/uptime"],
   ["loadavg",   "/bin/loadavg"],
   ["hwdiag",    "/bin/hwdiag"],
-  ["readme",    "/readme.txt"],
-  ["hw-notes",  "/hw-notes.txt"],
-  ["copy-notes","/copy-notes.txt"],
-  ["z80test",   "/bin/z80test"],
+  ["ps",        "/bin/ps"],
+  ["kill",      "/bin/kill"],
   [nil,         "/"],            # root directory
-  [nil,         "/bin"],           # directory itself
+  [nil,         "/bin"],         # /bin directory
+  [nil,         "/doc"],         # /doc directory
+  ["doc-readme","/doc/readme.txt"],
+  ["doc-hw-notes","/doc/hw-notes.txt"],
+  ["doc-copy-notes","/doc/copy-notes.txt"],
+  ["doc-arch",  "/doc/arch.txt"],
+  ["doc-rom",   "/doc/rom.txt"],
+  [nil,         "/cgi-bin"],     # /cgi-bin directory
+  ["cgi-index", "/cgi-bin/index"],
+  ["cgi-hello", "/cgi-bin/hello"],
   ["shell",     "/sbin/shell"],
   ["fs_server", "/sbin/fs_server"],
   ["mm_server", "/sbin/mm_server"],
   ["pm_server", "/sbin/pm_server"],
-  [nil,         "/sbin"]           # directory itself
+  [nil,         "/sbin"]         # directory itself
 ]
 
 # Files that are MZ executables and must therefore start with 0x4D 0x5A.  The
@@ -67,8 +74,8 @@ EXPECTED_FILES = [
 # header missing from a userspace binary is the difference between a program
 # the loader runs and a blob it refuses at exec.
 BINARY_FILES = %w[
-  echo cat ls date top uptime loadavg hwdiag z80test
-  shell fs_server mm_server pm_server
+  echo cat ls date top uptime loadavg hwdiag ps kill
+  shell fs_server mm_server pm_server cgi-index cgi-hello
 ]
 
 # Resolve a path like /bin/ls or /sbin/fs_server in the MINIX filesystem.

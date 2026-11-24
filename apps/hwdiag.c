@@ -14,16 +14,16 @@ static int g_failures;
 
 #define HWDIAG_LOAD_Q14_ONE 16384u
 
-static void report(const char *name, int ok, const char *detail)
-{
+static void
+report(const char *name, int ok, const char *detail) {
     printf("[%s] %s: %s\n", ok ? "OK" : "FAIL", name, detail);
     if (!ok) {
         g_failures++;
     }
 }
 
-static int rtc_valid(const struct rtc_time *t)
-{
+static int
+rtc_valid(const struct rtc_time *t) {
     if (t->second >= 60 || t->minute >= 60 || t->hour >= 24 ||
         t->month < 1 || t->month > 12 || t->day < 1 || t->day > 31 ||
         t->year > 99 || t->weekday > 7) {
@@ -32,8 +32,8 @@ static int rtc_valid(const struct rtc_time *t)
     return 1;
 }
 
-static void check_rtc(void)
-{
+static void
+check_rtc(void) {
     struct rtc_time now;
     struct rtc_time boot;
     int32_t elapsed;
@@ -61,8 +61,8 @@ static void check_rtc(void)
     report("RTC boot baseline", uptime_ok, uptime_detail);
 }
 
-static void check_ctc_accounting(void)
-{
+static void
+check_ctc_accounting(void) {
     uint32_t windows[3];
     int rc = sys_load(windows);
     int ok = rc == 0;
@@ -84,8 +84,8 @@ static void check_ctc_accounting(void)
            (int)windows[0], (int)windows[1], (int)windows[2]);
 }
 
-static void check_process_table(void)
-{
+static void
+check_process_table(void) {
     struct proc_info info;
     int active = 0;
     int errors = 0;
@@ -106,15 +106,15 @@ static void check_process_table(void)
            active, MUZIX_PROC_INFO_SLOTS);
 }
 
-static void check_romfs(void)
-{
+static void
+check_romfs(void) {
     char sample[16];
-    int fd = open("/readme.txt", 0);
+    int fd = open("/doc/readme.txt", 0);
     int count;
     int close_rc;
 
     if (fd < 0) {
-        report("ROM filesystem", 0, "cannot open /readme.txt");
+        report("ROM filesystem", 0, "cannot open /doc/readme.txt");
         return;
     }
     count = read(fd, sample, sizeof(sample));
@@ -122,14 +122,14 @@ static void check_romfs(void)
     if (count <= 0) {
         report("ROMFS read", 0, "read returned no data or failed");
     } else {
-        printf("[OK] ROMFS read: %d bytes from /readme.txt\n", count);
+        printf("[OK] ROMFS read: %d bytes from /doc/readme.txt\n", count);
     }
     report("ROMFS close", close_rc == 0,
-           close_rc == 0 ? "closed /readme.txt" : "close syscall failed");
+           close_rc == 0 ? "closed /doc/readme.txt" : "close syscall failed");
 }
 
-static void check_console_query(void)
-{
+static void
+check_console_query(void) {
     int pending = tty_input_pending();
 
     if (pending < 0) {
@@ -230,8 +230,8 @@ static void check_ppi_extended(void)
     printf("  Port C restored: 0x%02x\n", z80_inb(0x62));
 }
 
-int main(int argc, char *argv[])
-{
+int
+main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 

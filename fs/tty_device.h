@@ -1,8 +1,7 @@
 #ifndef MUZIX_TTY_DEVICE_H
 #define MUZIX_TTY_DEVICE_H
 
-#include <stdint.h>
-#include <stddef.h>
+#include "ztypes.h"
 
 /* The request numbers, the line-discipline flags and the line buffer size are
  * an interface with programs as well as with this device, so they are written

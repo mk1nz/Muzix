@@ -66,6 +66,8 @@ headers = sources.flat_map do |src|
   out, ok = Open3.capture2e(ENV.fetch('HOST_CC', 'gcc'), '-MM',
                            '-I' + File.join(EMULATOR, 'z80pack'),
                            '-I' + File.join(EMULATOR, 'z80'),
+                           '-I' + File.join(EMULATOR, 'zeta_sbc_v2'),
+                           '-I' + File.join(ROOT, 'include'),
                            File.join(EMULATOR, src), chdir: EMULATOR)
   unless ok.success?
     abort "FAIL: could not resolve the headers of emulator/#{src}:\n#{out}"

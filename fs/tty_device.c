@@ -3,7 +3,7 @@
 
 #include "../platform/zeta-v2/uart_io.h"
 
-#include <string.h>
+#include "libc.h"
 
 /* The device's send/recv/available calls, reached through the mirrored static
  * pointers rather than through the struct's own fields or called directly.
@@ -120,8 +120,8 @@ static void tty_put_byte(uint8_t byte)
     tty_do_send(byte);
 }
 
-static void muzix_tty_echo(muzix_tty_device_t *tty, uint8_t byte)
-{
+static void
+muzix_tty_echo(muzix_tty_device_t *tty, uint8_t byte) {
     if ((tty->params.flags & MUZIX_TTY_FLAG_ECHO) != 0) {
         tty_put_byte(byte);
     }
@@ -179,8 +179,8 @@ static void tty_echo_erased_char(muzix_tty_device_t *tty)
 #define tty_is_erase(tty, byte)                                        \
     ((byte) == 0x08u || (byte) == 0x7Fu || (byte) == (tty)->params.erase)
 
-void muzix_tty_device_init(muzix_tty_device_t *tty)
-{
+void
+muzix_tty_device_init(muzix_tty_device_t *tty) {
     if (!tty) {
         return;
     }
@@ -635,8 +635,8 @@ static uint16_t muzix_tty_input_pending(muzix_tty_device_t *tty)
     return pending;
 }
 
-int muzix_tty_ioctl(muzix_tty_device_t *tty, uint16_t request, void *argument)
-{
+int
+muzix_tty_ioctl(muzix_tty_device_t *tty, uint16_t request, void *argument) {
     if (!tty || !argument) {
         return -1;
     }

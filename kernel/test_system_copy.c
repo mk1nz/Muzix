@@ -14,8 +14,8 @@
 #include "../mm/mm_copy.h"
 #include "../platform/zeta-v2/test_kernel/context_switch.h"
 
-static int test_system_copy(void)
-{
+static int
+test_system_copy(void) {
     zeta_state_t state;
     zeta_process_table_t table;
     process_map_t kernel_map = {{7, 7, 7, 7}};
@@ -49,7 +49,7 @@ static int test_system_copy(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_system_copy();
 }

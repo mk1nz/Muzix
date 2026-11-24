@@ -1,13 +1,13 @@
 #include "msg_pool.h"
 
-#include <string.h>
+#include "libc.h"
 
 #include "../platform/zeta-v2/tick.h"
 #include "../mm/mm_copy.h"
 
-static int muzix_msg_pool_enqueue(muzix_msg_pool_t *pool,
-                                  const muzix_system_message_t *msg)
-{
+static int
+muzix_msg_pool_enqueue(muzix_msg_pool_t *pool,
+                       const muzix_system_message_t *msg) {
     if (!pool || pool->count >= MUZIX_MSG_POOL_SIZE) {
         return MUZIX_MSG_FULL;
     }
@@ -17,9 +17,9 @@ static int muzix_msg_pool_enqueue(muzix_msg_pool_t *pool,
     return MUZIX_MSG_OK;
 }
 
-static int muzix_msg_pool_dequeue(muzix_msg_pool_t *pool,
-                                  muzix_system_message_t *msg)
-{
+static int
+muzix_msg_pool_dequeue(muzix_msg_pool_t *pool,
+                       muzix_system_message_t *msg) {
     if (!pool || pool->count == 0) {
         return MUZIX_MSG_EMPTY;
     }
@@ -29,11 +29,11 @@ static int muzix_msg_pool_dequeue(muzix_msg_pool_t *pool,
     return MUZIX_MSG_OK;
 }
 
-static int muzix_msg_pool_find(muzix_msg_pool_t *pool,
-                               int sender_slot,
-                               int receiver_slot,
-                               muzix_system_message_t *msg)
-{
+static int
+muzix_msg_pool_find(muzix_msg_pool_t *pool,
+                    int sender_slot,
+                    int receiver_slot,
+                    muzix_system_message_t *msg) {
     uint8_t i;
     uint8_t idx;
 
@@ -60,42 +60,42 @@ static int muzix_msg_pool_find(muzix_msg_pool_t *pool,
     return MUZIX_MSG_EMPTY;
 }
 
-static void muzix_msg_copy_from_user(muzix_mm_service_t *mm,
-                                     int src_proc,
-                                     const muzix_system_message_t *src,
-                                     muzix_system_message_t *dst)
-{
+static void
+muzix_msg_copy_from_user(muzix_mm_service_t *mm,
+                         int src_proc,
+                         const muzix_system_message_t *src,
+                         muzix_system_message_t *dst) {
     (void)mm;
     (void)src_proc;
     *dst = *src;
 }
 
-static void muzix_msg_copy_to_user(muzix_mm_service_t *mm,
-                                   int dst_proc,
-                                   const muzix_system_message_t *src,
-                                   muzix_system_message_t *dst)
-{
+static void
+muzix_msg_copy_to_user(muzix_mm_service_t *mm,
+                       int dst_proc,
+                       const muzix_system_message_t *src,
+                       muzix_system_message_t *dst) {
     (void)mm;
     (void)dst_proc;
     *dst = *src;
 }
 
-void muzix_msg_pool_init(muzix_msg_pool_t *pool)
-{
+void
+muzix_msg_pool_init(muzix_msg_pool_t *pool) {
     if (!pool) {
         return;
     }
     memset(pool, 0, sizeof(*pool));
 }
 
-int muzix_msg_send(muzix_msg_pool_t *pool,
-                   muzix_mm_service_t *mm,
-                   muzix_kernel_proc_table_t *proc_table,
-                   int sender_slot,
-                   int receiver_slot,
-                   const muzix_system_message_t *msg,
-                   uint8_t op)
-{
+int
+muzix_msg_send(muzix_msg_pool_t *pool,
+               muzix_mm_service_t *mm,
+               muzix_kernel_proc_table_t *proc_table,
+               int sender_slot,
+               int receiver_slot,
+               const muzix_system_message_t *msg,
+               uint8_t op) {
     muzix_system_message_t kern_msg;
     int result;
 
@@ -140,14 +140,14 @@ int muzix_msg_send(muzix_msg_pool_t *pool,
     return MUZIX_MSG_OK;
 }
 
-int muzix_msg_receive(muzix_msg_pool_t *pool,
-                      muzix_mm_service_t *mm,
-                      muzix_kernel_proc_table_t *proc_table,
-                      int receiver_slot,
-                      int sender_slot,
-                      muzix_system_message_t *msg,
-                      uint8_t op)
-{
+int
+muzix_msg_receive(muzix_msg_pool_t *pool,
+                  muzix_mm_service_t *mm,
+                  muzix_kernel_proc_table_t *proc_table,
+                  int receiver_slot,
+                  int sender_slot,
+                  muzix_system_message_t *msg,
+                  uint8_t op) {
     muzix_system_message_t kern_msg;
     int result;
 
@@ -179,13 +179,13 @@ int muzix_msg_receive(muzix_msg_pool_t *pool,
     return MUZIX_MSG_EMPTY;
 }
 
-int muzix_msg_respond(muzix_msg_pool_t *pool,
-                      muzix_mm_service_t *mm,
-                      muzix_kernel_proc_table_t *proc_table,
-                      int responder_slot,
-                      int sender_slot,
-                      const muzix_system_message_t *msg)
-{
+int
+muzix_msg_respond(muzix_msg_pool_t *pool,
+                  muzix_mm_service_t *mm,
+                  muzix_kernel_proc_table_t *proc_table,
+                  int responder_slot,
+                  int sender_slot,
+                  const muzix_system_message_t *msg) {
     muzix_system_message_t kern_msg;
 
     if (!pool || !mm || !proc_table || !msg ||

@@ -8,7 +8,7 @@
 #include "path.h"
 #include "volume.h"
 #include "tty_device.h"
-#include <stddef.h>
+#include "ztypes.h"
 
 /* Descriptor table (file numbers) and description table (open file objects) are
  * separate capacities.  Sharing one count of 4 made pipe() impossible: the

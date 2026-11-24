@@ -3,13 +3,12 @@
 #include "../kernel/system_task.h"
 #include "../kernel/kernel_loop.h"
 #include "../kernel/proc_table.h"
+#include "libc.h"
 
-#include <string.h>
-
-void muzix_mm_service_init(muzix_mm_service_t *mm,
-                           struct muzix_system_task_t *system_task,
-                           uint8_t source)
-{
+void
+muzix_mm_service_init(muzix_mm_service_t *mm,
+                      struct muzix_system_task_t *system_task,
+                      uint8_t source) {
     if (!mm) {
         return;
     }
@@ -19,8 +18,8 @@ void muzix_mm_service_init(muzix_mm_service_t *mm,
     mm->source = source;
 }
 
-int muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page)
-{
+int
+muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page) {
     if (!mm) {
         return -1;
     }
@@ -33,16 +32,16 @@ int muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page)
     return zeta_memory_alloc_page(page);
 }
 
-void muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page)
-{
+void
+muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page) {
     if (!mm) {
         return;
     }
     zeta_memory_release_page(page);
 }
 
-void muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_map)
-{
+void
+muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_map) {
     if (!mm) {
         return;
     }
@@ -51,8 +50,8 @@ void muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_ma
     zeta_memory_init(kernel_map);
 }
 
-int muzix_mm_newmap(muzix_mm_service_t *mm, uint8_t proc_slot, uint16_t map_ptr)
-{
+int
+muzix_mm_newmap(muzix_mm_service_t *mm, uint8_t proc_slot, uint16_t map_ptr) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task) {
@@ -67,15 +66,15 @@ int muzix_mm_newmap(muzix_mm_service_t *mm, uint8_t proc_slot, uint16_t map_ptr)
     return muzix_system_task_handle_message(mm->system_task, &msg);
 }
 
-int muzix_mm_copy(muzix_mm_service_t *mm,
-                  uint8_t src_proc,
-                  uint8_t src_seg,
-                  uint16_t src_vir,
-                  uint8_t dst_proc,
-                  uint8_t dst_seg,
-                  uint16_t dst_vir,
-                  uint16_t byte_count)
-{
+int
+muzix_mm_copy(muzix_mm_service_t *mm,
+              uint8_t src_proc,
+              uint8_t src_seg,
+              uint16_t src_vir,
+              uint8_t dst_proc,
+              uint8_t dst_seg,
+              uint16_t dst_vir,
+              uint16_t byte_count) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task) {
@@ -92,12 +91,13 @@ int muzix_mm_copy(muzix_mm_service_t *mm,
     msg.dst_seg = dst_seg;
     msg.dst_vir = dst_vir;
     msg.byte_count = byte_count;
-return muzix_system_task_handle_message(mm->system_task, &msg);
+    return muzix_system_task_handle_message(mm->system_task, &msg);
 }
-int muzix_mm_load_map(muzix_mm_service_t *mm,
-                       uint8_t proc,
-                       const process_map_t *map)
-{
+
+int
+muzix_mm_load_map(muzix_mm_service_t *mm,
+                  uint8_t proc,
+                  const process_map_t *map) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task) {
@@ -112,9 +112,9 @@ int muzix_mm_load_map(muzix_mm_service_t *mm,
     return muzix_system_task_handle_message(mm->system_task, &msg);
 }
 
-int muzix_mm_load_kernel_map(muzix_mm_service_t *mm,
-                              const process_map_t *map)
-{
+int
+muzix_mm_load_kernel_map(muzix_mm_service_t *mm,
+                         const process_map_t *map) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task) {
@@ -127,11 +127,12 @@ int muzix_mm_load_kernel_map(muzix_mm_service_t *mm,
     msg.mem_ptr = (uint16_t)(uintptr_t)map;
     return muzix_system_task_handle_message(mm->system_task, &msg);
 }
-int muzix_mm_cross_bank_call(muzix_mm_service_t *mm,
-                               const process_map_t *target_map,
-                               int (*func)(void *),
-                               void *arg)
-{
+
+int
+muzix_mm_cross_bank_call(muzix_mm_service_t *mm,
+                         const process_map_t *target_map,
+                         int (*func)(void *),
+                         void *arg) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task) {
@@ -147,12 +148,12 @@ int muzix_mm_cross_bank_call(muzix_mm_service_t *mm,
     return muzix_system_task_handle_message(mm->system_task, &msg);
 }
 
-int muzix_mm_copy_page_to_kernel(muzix_mm_service_t *mm,
-                                  uint8_t page,
-                                  uint16_t offset,
-                                  void *dst,
-                                  uint16_t len)
-{
+int
+muzix_mm_copy_page_to_kernel(muzix_mm_service_t *mm,
+                             uint8_t page,
+                             uint16_t offset,
+                             void *dst,
+                             uint16_t len) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task || !dst) {
@@ -174,12 +175,12 @@ int muzix_mm_copy_page_to_kernel(muzix_mm_service_t *mm,
 /* Copy from ROM bank page to kernel buffer (for ROMFS reads). The bank
  * switching is the platform layer's job - see muzix_mm_copy_rom_page_to_kernel. */
 
-int muzix_mm_copy_rom_page_to_kernel(muzix_mm_service_t *mm,
-                                      uint8_t page,
-                                      uint16_t offset,
-                                      void *dst,
-                                      uint16_t len)
-{
+int
+muzix_mm_copy_rom_page_to_kernel(muzix_mm_service_t *mm,
+                                 uint8_t page,
+                                 uint16_t offset,
+                                 void *dst,
+                                 uint16_t len) {
     /* Delegate to the platform layer, which owns the bank registers.
      *
      * This used to do the bank switch itself, with region 1 and the window
@@ -201,12 +202,12 @@ int muzix_mm_copy_rom_page_to_kernel(muzix_mm_service_t *mm,
                                         (uint8_t *)dst, (size_t)len);
 }
 
-int muzix_mm_copy_user_to_kernel(muzix_mm_service_t *mm,
-                                  uint8_t src_proc,
-                                 uint16_t src_vir,
-                                 void *kernel_buf,
-                                 uint16_t len)
-{
+int
+muzix_mm_copy_user_to_kernel(muzix_mm_service_t *mm,
+                             uint8_t src_proc,
+                             uint16_t src_vir,
+                             void *kernel_buf,
+                             uint16_t len) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task || !kernel_buf) {
@@ -223,12 +224,12 @@ int muzix_mm_copy_user_to_kernel(muzix_mm_service_t *mm,
     return muzix_system_task_handle_message(mm->system_task, &msg);
 }
 
-int muzix_mm_copy_kernel_to_user(muzix_mm_service_t *mm,
-                                  uint8_t dst_proc,
-                                  uint16_t dst_vir,
-                                  const void *kernel_buf,
-                                  uint16_t len)
-{
+int
+muzix_mm_copy_kernel_to_user(muzix_mm_service_t *mm,
+                             uint8_t dst_proc,
+                             uint16_t dst_vir,
+                             const void *kernel_buf,
+                             uint16_t len) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task || !kernel_buf) {
@@ -245,8 +246,8 @@ int muzix_mm_copy_kernel_to_user(muzix_mm_service_t *mm,
     return muzix_system_task_handle_message(mm->system_task, &msg);
 }
 
-void muzix_mm_refresh_visible(muzix_mm_service_t *mm)
-{
+void
+muzix_mm_refresh_visible(muzix_mm_service_t *mm) {
     muzix_system_message_t msg;
 
     if (!mm || !mm->system_task) {

@@ -1,7 +1,7 @@
 #ifndef MUZIX_ZETA_SYSCALL_ENTRY_H
 #define MUZIX_ZETA_SYSCALL_ENTRY_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "test_kernel/bank_model.h"
 

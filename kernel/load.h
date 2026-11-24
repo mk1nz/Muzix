@@ -32,21 +32,19 @@
 #ifndef MUZIX_LOAD_H
 #define MUZIX_LOAD_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "proc_table.h"
 
 /* 1.0 in Q14. */
 #define LOAD_Q14_SCALE 16384u
 
-/* Fallback for a failed startup calibration on the known 4 MHz configuration. */
-#define MUZIX_LOAD_CTC3_COUNTS_PER_TICK 130u
+/* CTC0/CTC1 counts per tick: 921600/256/30 = 7680.  Fixed for all CPU
+ * frequencies because CTC0/CTC1 run from UART_CLK/2, not from CPU_CLK. */
+#define MUZIX_LOAD_CTC3_COUNTS_PER_TICK 7680u
 
 /* Record the boot instant and the calibrated CTC3 scale. */
 void muzix_load_init(uint16_t now_ticks, uint16_t counts_per_tick);
-
-/* Forget the last sample; the next is seeded from boot again.  For tests. */
-void muzix_load_reset(void);
 
 /* Fold the interval that has just ended into the three windows. */
 void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks);
@@ -87,5 +85,12 @@ void muzix_load_note_halted(uint16_t counts);
 
 /* One window: 0 for 1 minute, 1 for 5, 2 for 15.  Q14.  Out of range gives 0. */
 uint32_t muzix_load_window(int index);
+
+/* The fractional-decay coefficient for a window (0..2), or 0. */
+uint16_t muzix_load_frac_coef(int index);
+
+/* Halt measurement overhead in CTC0/CTC1 reference counts.
+ * Computed by muzix_load_init() from the detected CPU frequency. */
+uint16_t muzix_load_halt_overhead_counts(void);
 
 #endif /* MUZIX_LOAD_H */

@@ -169,8 +169,8 @@ static uint8_t test_xy(void)
     return sig;
 }
 
-int main(void)
-{
+int
+main(void) {
     uint8_t cmos, u880, xy_sig;
 
     printf("Z80 CPU Identification\n");

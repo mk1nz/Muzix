@@ -45,6 +45,8 @@
 	.globl h_resstamp
 	.globl h_resstampout
 	.globl h_resisr
+	.globl h_iff_state
+	.globl h_stval
 
 	.area _CODE
 
@@ -62,7 +64,14 @@ setc:
 	ret
 
 _start:
+	ld	a,(h_iff_state)	; 0 = enter with DI, non-zero = enter with EI
+	or	a
+	jr	nz,.with_ei
 	di
+	jr .continue
+.with_ei:
+	ei
+.continue:
 	ld	sp,#0xFF00
 
 ; ---- muzix_tick_now: the 16-bit return is in DE (plain -mz80) -------------
@@ -116,9 +125,9 @@ _start:
 	ld	(h_resstamp+1),a
 
 ; ---- muzix_tick_stamp_store, which the restamp fix depends on -------------
-	ld	a,#0x34
+	ld	a,(h_stval)
 	ld	(_muzix_tick_count),a
-	ld	a,#0x12
+	ld	a,(h_stval+1)
 	ld	(_muzix_tick_count+1),a
 	ld	hl,#_stamp
 	call	_muzix_tick_stamp_store
@@ -160,5 +169,7 @@ h_resapt:	.ds 4
 h_resstamp:	.ds 2
 h_resstampout:	.ds 2
 h_resisr:	.ds 2
+h_iff_state:	.ds 2
+h_stval:	.ds 2
 _cell:	.ds 4
 _stamp:	.ds 2

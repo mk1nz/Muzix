@@ -27,7 +27,7 @@
  * its own harness.  Neither covers the real filesystem behind the dispatcher, and
  * that remains the gap this file is written for.
  */
-#include <string.h>
+#include "libc.h"
 
 #include "fs_service.h"
 #include "../kernel/syscalls.h"
@@ -37,8 +37,8 @@
 
 static uint8_t disk[MUZIX_FS_BLOCK_SIZE * 32];
 
-static int read_block(struct muzix_block_device *device, uint16_t block, uint8_t *buffer)
-{
+static int
+read_block(struct muzix_block_device *device, uint16_t block, uint8_t *buffer) {
     (void)device;
     for (uint16_t i = 0; i < MUZIX_FS_BLOCK_SIZE; i++) {
         buffer[i] = disk[block * MUZIX_FS_BLOCK_SIZE + i];
@@ -46,8 +46,8 @@ static int read_block(struct muzix_block_device *device, uint16_t block, uint8_t
     return 0;
 }
 
-static int write_block(struct muzix_block_device *device, uint16_t block, const uint8_t *buffer)
-{
+static int
+write_block(struct muzix_block_device *device, uint16_t block, const uint8_t *buffer) {
     (void)device;
     for (uint16_t i = 0; i < MUZIX_FS_BLOCK_SIZE; i++) {
         disk[block * MUZIX_FS_BLOCK_SIZE + i] = buffer[i];
@@ -55,8 +55,8 @@ static int write_block(struct muzix_block_device *device, uint16_t block, const 
     return 0;
 }
 
-static int test_fs_service_io(void)
-{
+static int
+test_fs_service_io(void) {
     muzix_block_device_t device = {0, read_block, write_block, 32};
     muzix_fs_volume_t volume;
     muzix_fs_volume_t remounted;
@@ -565,7 +565,7 @@ static int test_fs_service_io(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_fs_service_io();
 }

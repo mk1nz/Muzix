@@ -3,10 +3,10 @@
 #include "../kernel/kernel_loop.h"
 #include "syscalls.h"
 
-#include <string.h>
+#include "libc.h"
 
-void muzix_system_task_init(muzix_system_task_t *task, void *loop, const process_map_t *kernel_map)
-{
+void
+muzix_system_task_init(muzix_system_task_t *task, void *loop, const process_map_t *kernel_map) {
     if (!task) {
         return;
     }
@@ -19,8 +19,8 @@ void muzix_system_task_init(muzix_system_task_t *task, void *loop, const process
     }
 }
 
-void muzix_system_task_stop(muzix_system_task_t *task)
-{
+void
+muzix_system_task_stop(muzix_system_task_t *task) {
     if (!task) {
         return;
     }
@@ -28,8 +28,8 @@ void muzix_system_task_stop(muzix_system_task_t *task)
     task->service.active = 0;
 }
 
-int muzix_system_task_active(const muzix_system_task_t *task)
-{
+int
+muzix_system_task_active(const muzix_system_task_t *task) {
     if (!task) {
         return 0;
     }
@@ -37,9 +37,9 @@ int muzix_system_task_active(const muzix_system_task_t *task)
     return task->service.active != 0;
 }
 
-int muzix_system_task_handle_message(muzix_system_task_t *task,
-                                    const muzix_system_message_t *msg)
-{
+int
+muzix_system_task_handle_message(muzix_system_task_t *task,
+                                  const muzix_system_message_t *msg) {
     if (!task || !msg || !muzix_system_task_active(task)) {
         return MUZIX_SYS_SERVICE_ERR;
     }
@@ -48,9 +48,9 @@ int muzix_system_task_handle_message(muzix_system_task_t *task,
     return muzix_system_service_dispatch(&task->service, msg);
 }
 
-int muzix_system_task_handle_syscall(muzix_system_task_t *task,
-                                    const void *call)
-{
+int
+muzix_system_task_handle_syscall(muzix_system_task_t *task,
+                                  const void *call) {
     muzix_syscall_context_t ctx;
 
     if (!task || !call || !muzix_system_task_active(task)) {

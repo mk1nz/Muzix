@@ -1,6 +1,6 @@
 #include "volume.h"
 
-#include <string.h>
+#include "libc.h"
 #include "../platform/zeta-v2/uart_io.h"
 #include "../platform/zeta-v2/trace.h"
 
@@ -23,9 +23,9 @@
 #define MUZIX_ENABLE_FORMAT 0
 #endif
 
-void muzix_fs_volume_init(muzix_fs_volume_t *volume,
-                          muzix_block_device_t *device)
-{
+void
+muzix_fs_volume_init(muzix_fs_volume_t *volume,
+                     muzix_block_device_t *device) {
     if (!volume) {
         return;
     }
@@ -36,14 +36,14 @@ void muzix_fs_volume_init(muzix_fs_volume_t *volume,
     muzix_fs_superblock_init(&volume->superblock, &volume->cache);
 }
 
-int muzix_fs_volume_flush(muzix_fs_volume_t *volume)
-{
+int
+muzix_fs_volume_flush(muzix_fs_volume_t *volume) {
     if (!volume || !volume->mounted) {
         return -1;
     }
 
     if (muzix_fs_allocator_save(&volume->cache, MUZIX_FS_ALLOCATOR_BLOCK,
-                               &volume->allocator) != 0 ||
+                                &volume->allocator) != 0 ||
         muzix_fs_inode_table_save(&volume->cache, MUZIX_FS_INODE_BLOCK,
                                   &volume->inodes) != 0 ||
         muzix_fs_directory_save(&volume->cache, MUZIX_FS_ROOT_DIRECTORY_BLOCK,
@@ -61,8 +61,8 @@ int muzix_fs_volume_flush(muzix_fs_volume_t *volume)
  * anything from handing block 4 to a file.  The bit layout is the one
  * muzix_fs_zone_is_used reads, so it is written out here rather than through
  * the allocator, whose mark helper is private. */
-static void muzix_fs_volume_reserve_metadata(muzix_fs_zone_allocator_t *allocator)
-{
+static void
+muzix_fs_volume_reserve_metadata(muzix_fs_zone_allocator_t *allocator) {
     uint16_t zone;
 
     for (zone = 0; zone < allocator->first_data_zone &&
@@ -72,11 +72,11 @@ static void muzix_fs_volume_reserve_metadata(muzix_fs_zone_allocator_t *allocato
 }
 
 #if MUZIX_ENABLE_FORMAT
-int muzix_fs_volume_format(muzix_fs_volume_t *volume,
-                           uint16_t inode_count,
-                           uint16_t zone_count,
-                           uint16_t first_data_zone)
-{
+int
+muzix_fs_volume_format(muzix_fs_volume_t *volume,
+                       uint16_t inode_count,
+                       uint16_t zone_count,
+                       uint16_t first_data_zone) {
     muzix_fs_inode_t *root;
 
     if (!volume || !volume->device || inode_count > MUZIX_FS_INODE_SLOTS ||
@@ -105,8 +105,8 @@ int muzix_fs_volume_format(muzix_fs_volume_t *volume,
 }
 #endif /* MUZIX_ENABLE_FORMAT */
 
-int muzix_fs_volume_mount(muzix_fs_volume_t *volume)
-{
+int
+muzix_fs_volume_mount(muzix_fs_volume_t *volume) {
     if (!volume || !volume->device) {
         return -1;
     }

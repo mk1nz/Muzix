@@ -1,6 +1,6 @@
 #include "file_io.h"
 
-#include <string.h>
+#include "libc.h"
 
 static int muzix_fs_file_zone(muzix_fs_block_cache_t *cache,
                               const muzix_fs_inode_t *inode,

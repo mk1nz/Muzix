@@ -16,9 +16,27 @@
 .globl _muzix_ctc_ch1
 .globl _muzix_uart_rx_count
 .globl _muzix_uart_rx_pending
+.globl _instr_total_counts
+.globl _instr_tick_count
+.globl _instr_min_delta
+.globl _instr_max_delta
+.globl _instr_over255_count
+.globl _instr_prev_ctc3
+.globl _instr_ctc3_valid
+.globl _instr_tick_isr_entries
+.globl _instr_uart_isr_entries
+.globl _instr_uart_lsr_snapshot
+.globl _muzix_tick_ctc3_counts_per_tick
 ; The counter itself, read inline by the bounded wait in uart_io.s and through
 ; muzix_tick_now() by everything in C.
 .globl _muzix_tick_count
+.globl _muzix_ctc01_read_phase
+.globl _muzix_ctc01_read_phase_nosave
+.globl _muzix_ctc01_read_phase_locked
+.globl _muzix_halt_begin
+.globl _muzix_halt_end
+.globl _muzix_ctc01_wake_phase
+.globl _muzix_ctc01_wake_valid
 
 ; ---------------------------------------------------------------- ports ----
 ;
@@ -379,6 +397,65 @@ _muzix_tick_calibration_status:
 	.db #0
 _muzix_tick_calibration_elapsed_ticks:
 	.dw #0
+_muzix_tick_ctc3_counts_per_tick:
+	.dw #0
+
+; ---------------------------------------------------------- CTC0/CTC1 phase counter for HALT accounting --
+;
+; The CTC0->CTC1 cascade (921600/256/30 = 120 Hz) provides a free-running
+; phase counter in units of ~1.085 us (921600 Hz / 256 / 30 = 120 Hz tick,
+; 7680 counts per tick).  This is independent of CPU clock frequency, unlike
+; CTC3 which counts CPU cycles.
+;
+; _muzix_ctc01_wake_phase / _muzix_ctc01_wake_valid: capture of the phase at
+; ISR entry, used by kernel_halt() to measure halted time without including
+; ISR execution time.  These live in _DATA (window 3, always kernel) so they
+; are reachable from any process map.
+_muzix_ctc01_wake_phase:
+	.dw #0
+_muzix_ctc01_wake_valid:
+	.db #0
+
+; ---------------------------------------------------------- instrumentation --
+; Per-tick CTC3 cycle delta accumulation, read from C by the scheduler's
+; window print.  These live in _CODE (window 0, always kernel) so the ISR can
+; reach them under any process map - same argument as _muzix_tick_count itself.
+;
+; _instr_total_counts: 32-bit accumulator of per-tick CTC3 deltas (wall time).
+; _instr_tick_count:   16-bit number of ticks in the current window.
+; _instr_min_delta:    8-bit minimum per-tick delta seen.
+; _instr_max_delta:    8-bit maximum per-tick delta seen.
+; _instr_over255_count:16-bit number of ticks whose delta was >= 255.
+; _instr_prev_ctc3:    8-bit previous CTC3 reading (for delta computation).
+; _instr_ctc3_valid:   8-bit flag: 1 once a previous reading exists.
+_instr_total_counts:
+	.dw #0
+	.dw #0
+_instr_tick_count:
+	.dw #0
+_instr_min_delta:
+	.db #255
+_instr_max_delta:
+	.db #0
+_instr_over255_count:
+	.dw #0
+_instr_prev_ctc3:
+	.db #0
+_instr_ctc3_valid:
+	.db #0
+
+; Interrupt entry counters for forensic analysis
+_instr_tick_isr_entries:
+	.dw #0
+_instr_uart_isr_entries:
+	.dw #0
+
+; UART LSR snapshot at window print time (bit 0 = data ready)
+_instr_uart_lsr_snapshot:
+	.db #0
+
+; Store the result of muzix_tick_calibrate_ctc3 into the public variable
+; before returning it, so muzix_tick_get_cpu_mhz_x10 can read it.
 
 ; ------------------------------------------------------------------ code ---
 
@@ -574,8 +651,41 @@ _muzix_tick_init:
 _muzix_tick_isr:
 	ex	af,af'		; the alternate set is the handler's - see above
 	exx
+	; Capture CTC0/CTC1 phase at ISR entry: this is the moment the
+	; CPU left HALT, so everything after this point is ISR time, not idle.
+	in	a,(MUZIX_CTC_CH0)	; c0a
+	ld	b,a
+	in	a,(MUZIX_CTC_CH1)	; c1
+	ld	c,a
+	in	a,(MUZIX_CTC_CH0)	; c0b
+	; No coherence check: both paths compute identically, so the branch is dead.
+	; Single snapshot with bounded error (<= 255 phase units = 3.3% of a tick).
+	ld	a,#29
+	sub	c			; A = 29 - c1
+	ld	d,a			; D = high byte
+	ld	a,#255
+	sub	b			; A = 255 - c0
+	ld	e,a			; E = low byte
+	ld	a,(_muzix_ctc01_wake_valid)
+	or	a
+	jr	nz,_tick_phase_end	; another ISR already wrote the snapshot
+	ld	hl,#_muzix_ctc01_wake_phase
+	ld	(hl),e			; write snapshot low byte
+	inc	hl
+	ld	(hl),d			; write snapshot high byte
+	ld	a,#1
+	ld	hl,#_muzix_ctc01_wake_valid
+	ld	(hl),a			; set valid = 1 only after snapshot
+_tick_phase_end:
 	push	ix
 	push	iy
+	; Count tick ISR entries
+	ld	hl,#_instr_tick_isr_entries
+	inc	(hl)
+	jr	nz,003$
+	inc	hl
+	inc	(hl)
+003$:
 
 	ld	hl,#_muzix_tick_count
 	inc	(hl)			; low byte first
@@ -583,6 +693,76 @@ _muzix_tick_isr:
 	inc	hl
 	inc	(hl)			; ... so the high byte goes last
 001$:
+	; Instrumentation: accumulate per-tick CTC3 cycle delta into 32-bit total.
+	; CTC3 channel 3 is a free-running timer at /256 of CPU clock, read with one
+	; `in`.  Safe under any process map: window 0 is always kernel, this handler
+	; is in window 0, and the port read touches no bank register.
+	ld	a,(_instr_ctc3_valid)
+	or	a
+	jr	nz,002$			; not first tick: compute delta
+	; First tick: store current reading, set valid flag, skip delta.
+	in	a,(MUZIX_CTC_CH3)
+	ld	hl,#_instr_prev_ctc3
+	ld	(hl),a
+	ld	a,#1
+	ld	(_instr_ctc3_valid),a
+	jr	013$			; skip delta accumulation
+002$:
+	ld	a,(_instr_prev_ctc3)	; A = previous
+	ld	b,a			; B = previous
+	in	a,(MUZIX_CTC_CH3)		; A = current
+	ld	c,a			; C = current
+	sub	b			; A = current - previous (delta, 8-bit wrap)
+	ld	d,a			; D = delta (preserve for min/max/over255)
+	ld	hl,#_instr_prev_ctc3
+	ld	(hl),c			; store current as previous
+	; Add delta to 32-bit accumulator (low byte first at label).
+	ld	a,d			; A = delta
+	ld	hl,#_instr_total_counts
+	add	a,(hl)
+	ld	(hl),a
+	inc	hl
+	ld	a,#0
+	adc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	ld	a,#0
+	adc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	ld	a,#0
+	adc	a,(hl)
+	ld	(hl),a
+	; A now holds byte3 of total. Restore delta from D for min/max/over255.
+	ld	a,d
+	; Update minimum delta seen.
+	ld	hl,#_instr_min_delta
+	cp	(hl)
+	jr	nc,010$
+	ld	(hl),a
+010$:
+	; Update maximum delta seen.
+	ld	hl,#_instr_max_delta
+	cp	(hl)
+	jr	c,011$
+	ld	(hl),a
+011$:
+	; Increment tick count (16-bit).
+	ld	hl,#_instr_tick_count
+	inc	(hl)
+	jr	nz,012$
+	inc	hl
+	inc	(hl)
+012$:
+	; Count ticks whose delta was >= 255 (possible missed wakeup / drift).
+	cp	#255
+	jr	c,013$
+	ld	hl,#_instr_over255_count
+	inc	(hl)
+	jr	nz,013$
+	inc	hl
+	inc	(hl)
+013$:
 	; One byte per tick, but only while the boot probe has asked for it.
 	ld	a,(_muzix_tick_probe)
 	or	a
@@ -596,7 +776,168 @@ _muzix_tick_isr:
 	ei
 	reti
 
-; The UART receive handler: count that it fired and say so.
+; ---------------------------------------------------------- CTC0/CTC1 phase reader --
+;
+; uint16_t muzix_ctc01_read_phase(void);
+;
+; Returns the current phase within the current 120 Hz tick, in units of
+; CTC0 cycles (one count = 1/921600 s = 1.085 us).  Range 0-7679.
+;
+; Reads CTC0-CTC1-CTC0 and verifies that CTC0 did not change between the two
+; reads.  If CTC0 wrapped between the reads, CTC1 would have decremented, so
+; comparing c0a == c0b guarantees that neither counter changed between the
+; first and second CTC0 reads, and therefore the pair (c0a, c1) is coherent.
+;
+; CTC0 external counting input: 921600 Hz (UART_CLK/2).  CTC0 decrements on
+; external CLK/TRG fronts synchronized with system CLK Phi per Zilog CTC
+; specification; a front violating setup time is deferred by one Phi cycle.
+; CTC0 ZC/TO at TC=256 fires at 3600 Hz (one pulse every 277.78 us), driving
+; CTC1.  The window between the two CTC0 reads in this routine is 44 T-states;
+; in the ISR snapshot path (tick.s:_muzix_uart_rx_isr, _muzix_tick_isr) it is
+; 15 T-states, so a wrap between reads is not mathematically impossible at any
+; supported CPU frequency.  The retry loop is retained for correctness.
+;
+; Result in DE (SDCC -mz80 16-bit return convention).  All registers preserved
+; except DE (return value).  May be called with interrupts enabled or disabled;
+; saves and restores the interrupt state itself.
+; ---------------------------------------------------------- locked phase reader --
+;
+; uint8_t muzix_ctc01_read_phase_locked(void);
+; Result in DE, status in A (0 = coherent, -1 = failure).  BC preserved.
+; Called with interrupts already disabled (the caller holds the lock).
+_muzix_ctc01_read_phase_locked:
+	push	bc
+	ld	b,#4
+1$:
+	ld	a,#0
+	in	a,(MUZIX_CTC_CH0)
+	ld	c,a
+	ld	a,#0
+	in	a,(MUZIX_CTC_CH1)
+	ld	d,a
+	ld	a,#0
+	in	a,(MUZIX_CTC_CH0)
+	cp	c
+	jr	c,2$
+	jr	z,2$
+	djnz	1$
+	pop	bc
+	ld	a,#-1
+	ld	de,#0
+	ret
+2$:
+	ld	a,#29
+	sub	d
+	ld	d,a
+	ld	a,#255
+	sub	c
+	ld	e,a
+	pop	bc
+	xor	a
+	ret
+
+_muzix_ctc01_read_phase:
+	di
+	call	_muzix_ctc01_read_phase_locked
+	cp	#0
+	jr	nz,.fail
+	ei
+	ret
+.fail:
+	ei
+	ret
+
+; ---------------------------------------------------------- nosave phase reader --
+;
+; void muzix_ctc01_read_phase_nosave(void);
+; Result in DE.  Same snapshot algorithm as _muzix_ctc01_read_phase but
+; without the DI/EI wrapper.  Intended for use from interrupt context or from
+; a caller that already holds the interrupt lock.  All registers preserved
+; except DE (return value).
+_muzix_ctc01_read_phase_nosave:
+	call	_muzix_ctc01_read_phase_locked
+	ret
+	sub	c			; A = 29 - c1
+	ld	d,a			; D = high byte
+	ld	a,#255
+	sub	b			; A = 255 - c0
+	ld	e,a			; E = low byte
+	ret
+
+; ---------------------------------------------------------- halt begin --
+;
+; uint16_t _muzix_halt_begin(void);
+;
+; Atomic halt entry sequence:
+;   di                         ; no interrupt can intervene
+;   read CTC0/CTC1 phase       ; timestamp = start of halted interval
+;   wake_valid = 0             ; discard any stale ISR snapshot
+;   ei                         ; enable (effective after next instruction)
+;   halt                       ; stop until interrupt
+;
+; Returns the start phase in DE.  After HALT returns, call _muzix_halt_end()
+; to fetch the wake phase and clear wake_valid atomically.
+;
+; This closes the race described in AGENTS.md section 5.1: an interrupt that
+; arrives between the phase read and the HALT is handled during HALT (interrupts
+; are enabled by the `ei` before `halt`), so its ISR sets wake_valid, and
+; _muzix_halt_end() will see it.  An interrupt that arrives before the phase
+; read is blocked by `di`.
+_muzix_halt_begin:
+	di
+	call	_muzix_ctc01_read_phase_locked
+	cp	#0
+	jr	nz,.halt_begin_fail
+	ld	hl,#_muzix_ctc01_wake_valid
+	ld	(hl),#0		; clear stale snapshot
+	ei
+	halt
+	ret
+.halt_begin_fail:
+	ld	hl,#_muzix_ctc01_wake_valid
+	ld	(hl),#0
+	ld	de,#0
+	ei
+	halt
+	ret
+
+; ---------------------------------------------------------- halt end --
+;
+; uint16_t _muzix_halt_end(void);
+;
+; Called after _muzix_halt_begin()'s HALT returns.  Atomically (interrupts
+; off):
+;   if wake_valid: after = wake_phase      ; ISR woke us, use its timestamp
+;   else:          after = read_phase_nosave() ; fallback, no ISR timestamp
+;   wake_valid = 0
+;
+; Returns the after phase in DE.  Interrupts are enabled before return.
+;
+; This prevents the wake timestamp from being overwritten by a later ISR
+; before the consuming code reads it.
+_muzix_halt_end:
+	di
+	ld	a,(_muzix_ctc01_wake_valid)
+	or	a
+	jr	z,00334$		; no wake (kernel_halt checks first, but be safe)
+	cp	#2			; fallback marker (UART woke, no snapshot)
+	jr	z,00333$		; fallback: read phase now via coherent reader
+	; otherwise: valid ISR snapshot (bit 0 set, values 1,5,9,13)
+00330$:
+	ld	hl,#_muzix_ctc01_wake_phase
+	ld	e,(hl)		; low byte
+	inc	hl
+	ld	d,(hl)		; high byte
+00333$:
+	ld	hl,#_muzix_ctc01_wake_valid
+	ld	(hl),#0		; clear valid
+	ei
+	ret
+00334$:
+	ei
+	ret
+
+; ---------------------------------------------------------- ISR entry snapshots --
 ;
 ; WHY IT CANNOT WAKE ANYBODY ITSELF
 ; ---------------------------------
@@ -646,12 +987,64 @@ _muzix_uart_rx_isr:
 	ex	af,af'		; same exchange trick as the tick handler: the
 	exx			; alternate set is the handlers' - see the note
 				; above the tick handler for why it is free
-	ld	hl,#_uart_rx_count
+	; Capture CTC0/CTC1 phase at ISR entry with bounded coherent read.
+	; CTC0 is a down-counter: if c0b > c0a between the two CTC0 reads,
+	; a wrap (reload) occurred and the pair (c0a, c1) is incoherent.
+	; Retry up to 4 times; on success encode wake_valid = 1 + retries*4
+	; (bit 0 = valid, bits 1-2 = failed attempts).  On exhaustion write
+	; wake_valid = 2 (bit 0 clear, non-zero): UART woke CPU but snapshot
+	; unavailable, _muzix_halt_end() falls back to coherent read.
+	ld	b,#4			; max 4 attempts
+1$:
+	in	a,(MUZIX_CTC_CH0)	; c0a
+	ld	c,a			; c = c0a
+	in	a,(MUZIX_CTC_CH1)	; c1
+	ld	d,a			; d = c1
+	in	a,(MUZIX_CTC_CH0)	; c0b
+	cp	c			; c0b - c0a
+	jr	c,2$			; c0b < c0a: coherent (normal decrement)
+	jr	z,2$			; c0b == c0a: coherent (no change)
+	djnz	1$			; c0b > c0a: wrap, retry
+	; Four failed attempts: mark fallback (wake_valid = 2)
+	ld	a,#2
+	ld	(_muzix_ctc01_wake_valid),a
+	jr	_uart_phase_end
+2$:
+	; coherent: c0a in c, c1 in d
+	ld	a,#29
+	sub	d			; A = 29 - c1
+	ld	d,a			; D = high byte
+	ld	a,#255
+	sub	c			; A = 255 - c0a
+	ld	e,a			; E = low byte
+	ld	a,(_muzix_ctc01_wake_valid)
+	or	a
+	jr	nz,_uart_phase_end	; another ISR already wrote the snapshot
+	ld	hl,#_muzix_ctc01_wake_phase
+	ld	(hl),e			; write snapshot low byte
+	inc	hl
+	ld	(hl),d			; write snapshot high byte
+	ld	a,#4			; encode wake_valid = 1 + retries*4 (bits 1-2 = retries)
+	sub	b
+	sla	a
+	sla	a
+	or	a,#1
+	ld	hl,#_muzix_ctc01_wake_valid
+	ld	(hl),a			; set valid=1, bits 1-2 = failed attempts (0..3)
+_uart_phase_end:
+	; Count UART ISR entries
+	ld	hl,#_instr_uart_isr_entries
 	inc	(hl)
-	jr	nz,002$
+	jr	nz,_uart_count_loop
 	inc	hl
 	inc	(hl)
-002$:
+_uart_count_loop:
+	ld	hl,#_uart_rx_count
+	inc	(hl)
+	jr	nz,_uart_count_done
+	inc	hl
+	inc	(hl)
+_uart_count_done:
 	ld	a,#1
 	ld	(_uart_rx_pending),a
 
@@ -706,6 +1099,9 @@ _muzix_uart_rx_isr:
 ; tick landing in the middle of it, and it is the other half of the argument in
 ; the handler above.
 _muzix_tick_now:
+	ld	a,i			; P/V = IFF2, the incoming interrupt state
+	di			; disable for the atomic read
+	push	af		; save P/V so the read can clobber flags
 	ld	de,#_muzix_tick_count+1	; the label holds the LOW byte (see the
 	ld	a,(de)			; data note), so label+1 is the high
 	ld	h,a			; byte and that is the one read first.
@@ -716,6 +1112,11 @@ _muzix_tick_now:
 	ld	a,(de)
 	ld	l,a			; HL = now
 	ex	de,hl			; DE = now, which is the return register
+	pop	af			; restore P/V = the state we entered with
+	jp	pe,.restore_ei_now	; if IFF2 was set, put EI back
+	ret			; otherwise leave DI as we found it
+.restore_ei_now:
+	ei			; restore the enabled state we found
 	ret
 
 ; uint8_t muzix_tick_expired(uint16_t deadline)  - deadline in HL, result in A
@@ -743,6 +1144,7 @@ _muzix_tick_expired:
 					; Z80 has `ld r,(hl)` but no
 					; `ld l,(de)`, and the deadline
 					; arrives in HL
+	di
 	ld	bc,#_muzix_tick_count+1	; label+1 is the high byte.  BC is the
 	ld	a,(bc)			; pointer, not HL: HL holds the high
 	ld	h,a			; byte being built, and `ld h,a` would
@@ -750,6 +1152,7 @@ _muzix_tick_expired:
 	dec	bc			; ... and the low byte second
 	ld	a,(bc)
 	ld	l,a			; HL = now
+	ei
 	or	a
 	sbc	hl,de			; HL = now - deadline
 	jp	m,001$			; not yet: bit 15 of the difference is
@@ -844,21 +1247,26 @@ _muzix_tick_expired:
 ; the thing that has to be true afterwards.
 _muzix_tick_add_process_time:
 	push	hl			; the counter pointer - see the note
+	ld	a,i			; P/V = IFF2, the incoming interrupt state
+	di			; disable for the atomic read
+	push	af		; save P/V so the read can clobber flags
 	ld	hl,#_muzix_tick_count+1	; label+1 is the high byte
 	ld	a,(hl)			; now high
 	ld	b,a
 	dec	hl			; ... and the low byte second
 	ld	a,(hl)			; now low
 	ld	c,a			; BC = now, C low and B high
-
+	pop	af			; restore P/V = the state we entered with
+	jp	pe,.do_ei		; if IFF2 was set, go to EI path
+	; DI path: fall through, no EI
 	ld	a,(de)			; the old stamp, low byte first
 	ld	l,a			; L = stamp low
-	ld	a,c
+	ld	a,c			; A = now low
 	ld	(de),a			; restamp, before anything else can
 	inc	de			; change the difference
 	ld	a,(de)			; the old stamp's other byte
 	ld	h,a			; H = stamp high
-	ld	a,b
+	ld	a,b			; A = now high
 	ld	(de),a			; ... and its restamp
 
 	ld	a,c			; elapsed = now - stamp, low half
@@ -890,6 +1298,43 @@ _muzix_tick_add_process_time:
 	adc	a,#0x00
 	ld	(hl),a
 	ret
+.do_ei:
+	ei			; restore the enabled state we found
+	; HL still = _muzix_tick_count (stamp value builder), same as DI path
+	ld	a,(de)			; the old stamp, low byte first
+	ld	l,a			; L = stamp low
+	ld	a,c			; A = now low
+	ld	(de),a			; restamp, before anything else can
+	inc	de			; change the difference
+	ld	a,(de)			; the old stamp's other byte
+	ld	h,a			; H = stamp high
+	ld	a,b			; A = now high
+	ld	(de),a			; ... and its restamp
+
+	ld	a,c			; elapsed = now - stamp, low half
+	sub	a,l			; first and high half with the carry
+	ld	e,a
+	ld	a,b
+	sbc	a,h
+	ld	d,a			; DE = elapsed, 16-bit, little-endian
+
+	pop	hl			; HL = the counter, and it stays here
+	ld	a,(hl)
+	add	a,e
+	ld	(hl),a
+	inc	hl
+	ld	a,(hl)
+	adc	a,d
+	ld	(hl),a
+	inc	hl
+	ld	a,(hl)
+	adc	a,#0x00
+	ld	(hl),a
+	inc	hl
+	ld	a,(hl)
+	adc	a,#0x00
+	ld	(hl),a
+	ret
 
 ; void muzix_tick_stamp_store(uint16_t *stamp)  - HL = stamp
 ;
@@ -901,13 +1346,21 @@ _muzix_tick_add_process_time:
 ; out twice in kernel/proc_table.c at 19 bytes a time, and this is 10 plus two
 ; calls.
 _muzix_tick_stamp_store:
+	ld	a,i			; P/V = IFF2, the incoming interrupt state
+	di			; disable for the atomic read
+	push	af		; save P/V so the read can clobber flags
 	ld	bc,#_muzix_tick_count
-	ld	a,(bc)
+	ld	a,(bc)		; LOW byte first
 	ld	(hl),a
 	inc	hl
 	inc	bc
-	ld	a,(bc)
+	ld	a,(bc)		; HIGH byte second
 	ld	(hl),a
+	pop	af		; restore P/V = the state we entered with
+	jp	pe,.restore_ei_store	; if IFF2 was set, put EI back
+	ret			; otherwise leave DI as we found it
+.restore_ei_store:
+	ei			; restore the enabled state we found
 	ret
 
 ; uint16_t muzix_uart_rx_count(void)  - DE = count, HL also
@@ -947,9 +1400,11 @@ _muzix_uart_rx_count:
 ; has no registers the compiler will promise are dead across a call, so the rule
 ; for every bridge in this file is: touch only what the result needs, or save it.
 _muzix_uart_rx_pending:
+	di
 	ld	hl,#_uart_rx_pending
 	ld	a,(hl)
 	ld	(hl),#0			; clear, without destroying A
+	ei
 	ret
 
 ; uint8_t muzix_tick_cycles(void)  - A = channel 3's count
@@ -967,6 +1422,7 @@ _muzix_uart_rx_pending:
 ; It is the CTC's third channel, and the same register uart_io.s reads as the
 ; UART's receive buffer at 0x68 is a different port entirely.
 _muzix_tick_cycles:
+	ld	a,#0
 	in	a,(0x23)
 	ret
 
@@ -994,6 +1450,7 @@ _muzix_tick_calibrate_ctc3:
 	ld	bc,#0
 1$:
 	call	_muzix_tick_now
+	ld	a,#0
 	in	a,(0x23)
 	ld	l,a
 	ld	a,(_ctc3_cal_previous)
@@ -1048,13 +1505,11 @@ _muzix_tick_calibrate_ctc3:
 	rr	l
 	srl	h
 	rr	l
-	ld	a,h
-	or	a
-	jr	z,6$
-	ld	a,#3
-	ld	(_muzix_tick_calibration_status),a
-	jr	8$
-6$:
+	; The result in HL is CTC3 counts per tick, a 16-bit value.  Accept any
+	; non-zero result: at 20 MHz this is about 651 counts per tick, well above
+	; the old 8-bit limit of 255.  The HALT measurement uses modulo-256
+	; arithmetic and is unambiguous only when fewer than 256 CTC3 counts elapse
+	; between observations (true at 2, 4 and 6 MHz, not guaranteed above).
 	ld	a,l
 	or	a
 	jr	nz,7$
@@ -1062,6 +1517,8 @@ _muzix_tick_calibrate_ctc3:
 	ld	(_muzix_tick_calibration_status),a
 	jr	8$
 7$:
+	ex	de,hl
+	ld	(_muzix_tick_ctc3_counts_per_tick),hl
 	ex	de,hl
 	ret
 8$:
@@ -1073,6 +1530,7 @@ _muzix_tick_calibrate_ctc3:
 	ld	(_muzix_tick_calibration_elapsed_ticks),hl
 4$:
 	ld	de,#0
+	ld	(_muzix_tick_ctc3_counts_per_tick),de
 	ret
 
 ; uint8_t muzix_ctc_ch0(void)  /  uint8_t muzix_ctc_ch1(void)  - A = counter

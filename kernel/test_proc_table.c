@@ -1,4 +1,4 @@
-#include <string.h>
+#include "libc.h"
 
 #include "proc_table.h"
 
@@ -10,8 +10,8 @@ void muzix_host_tick_set(uint16_t ticks);
 void muzix_host_tick_advance(uint16_t ticks);
 void muzix_tick_stamp_store(uint16_t *stamp);
 
-static int test_proc_table(void)
-{
+static int
+test_proc_table(void) {
     muzix_kernel_proc_table_t table;
     process_map_t kernel_map = {{7, 7, 7, 7}};
     process_map_t map_a = {{1, 2, 3, 3}};
@@ -227,8 +227,8 @@ static int test_park_and_wake(void)
     return 0;
 }
 
-static int test_two_ready_in_one_queue(void)
-{
+static int
+test_two_ready_in_one_queue(void) {
     muzix_kernel_proc_table_t t;
     muzix_mproc_t a;
     muzix_mproc_t b;
@@ -579,8 +579,317 @@ static int test_ready_list_invariants(void)
     return 0;
 }
 
-int main(void)
-{
+/* ---- sys_wait() race-condition regression tests -------------------------- */
+
+/* Test: muzix_proc_table_exit_status() records exited=1 and exit_status
+ * BEFORE muzix_proc_table_exit() wakes a parked parent.  When the parent is
+ * readied and rescans, it finds a fully-formed zombie, not a slot with
+ * exited still 0. */
+static int test_exit_status_zombie_before_wake(void) {
+    muzix_kernel_proc_table_t t;
+    muzix_mproc_t parent_proc;
+    muzix_mproc_t child_proc;
+    process_map_t kernel_map = {{7, 7, 7, 7}};
+    process_map_t map_p = {{1, 2, 3, 3}};
+    process_map_t map_c = {{4, 5, 6, 3}};
+
+    memset(&t, 0, sizeof(t));
+    muzix_mproc_init(&parent_proc, 0x0000u, 0x1000u, 0x2000u, 0x1000u, 0x1000u, 0x1000u, 10);
+    muzix_mproc_init(&child_proc, 0x3000u, 0x4000u, 0x5000u, 0x1000u, 0x1000u, 0x1000u, 20);
+    muzix_proc_table_init(&t, &kernel_map);
+
+    /* Slot 0: parent, pid 10, already parked waiting for child. */
+    muzix_proc_table_register(&t, 0, 10, &parent_proc, &map_p,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+    t.slots[0].p_flags |= MUZIX_PROC_WAIT_TICK;
+    t.slots[0].tick_deadline_valid = 0u;
+    t.slots[0].tick_stamp = 0xFFFFu;
+    muzix_proc_table_unlink(&t, 0);
+
+    /* Slot 1: child, pid 20, active, not yet exited. */
+    muzix_proc_table_register(&t, 1, 20, &child_proc, &map_c,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+
+    /* Child exits with status 42.  This must set exited=1 and exit_status=42
+     * before waking the parent. */
+    if (muzix_proc_table_exit_status(&t, 1, 10, 42) != 0) {
+        return 1;
+    }
+
+    /* Child is now a zombie: exited=1, exit_status=42, inactive. */
+    if (!t.slots[1].exited) {
+        return 2;
+    }
+    if (t.slots[1].exit_status != 42) {
+        return 3;
+    }
+    if (t.slots[1].active) {
+        return 4;
+    }
+
+    /* Parent was woken and readied: WAIT_TICK cleared, on a ready queue. */
+    if ((t.slots[0].p_flags & MUZIX_PROC_WAIT_TICK) != 0u) {
+        return 5;
+    }
+    if (!muzix_proc_is_ready(&t, 0)) {
+        return 6;
+    }
+
+    /* The parent's rescan finds the zombie: exited=1 and parent_pid matches. */
+    int found = 0;
+    for (int i = 0; i < MUZIX_PROC_TABLE_MAX; i++) {
+        if (t.slots[i].exited && t.slots[i].parent_pid == 10) {
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        return 7;
+    }
+
+    return 0;
+}
+
+/* Test: a child that already exited before wait() is reaped immediately -
+ * the scan finds exited=1 without any park. */
+static int test_wait_scan_finds_already_exited(void) {
+    muzix_kernel_proc_table_t t;
+    muzix_mproc_t parent_proc;
+    muzix_mproc_t child_proc;
+    process_map_t kernel_map = {{7, 7, 7, 7}};
+    process_map_t map_p = {{1, 2, 3, 3}};
+    process_map_t map_c = {{4, 5, 6, 3}};
+
+    memset(&t, 0, sizeof(t));
+    muzix_mproc_init(&parent_proc, 0x0000u, 0x1000u, 0x2000u, 0x1000u, 0x1000u, 0x1000u, 10);
+    muzix_mproc_init(&child_proc, 0x3000u, 0x4000u, 0x5000u, 0x1000u, 0x1000u, 0x1000u, 20);
+    muzix_proc_table_init(&t, &kernel_map);
+
+    /* Slot 0: parent, pid 10, active and runnable (not parked). */
+    muzix_proc_table_register(&t, 0, 10, &parent_proc, &map_p,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+    muzix_proc_table_ready(&t, 0);
+
+    /* Slot 1: child, pid 20, already a zombie with exit_status 7. */
+    muzix_proc_table_register(&t, 1, 20, &child_proc, &map_c,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+    t.slots[1].parent_pid = 10;
+    t.slots[1].exit_status = 7;
+    t.slots[1].exited = 1;
+    t.slots[1].active = 0;
+
+    /* The wait scan finds the zombie immediately. */
+    int found = -1;
+    for (int i = 0; i < MUZIX_PROC_TABLE_MAX; i++) {
+        if (t.slots[i].exited && t.slots[i].parent_pid == 10) {
+            found = i;
+            break;
+        }
+    }
+    if (found != 1) {
+        return 1;
+    }
+    if (t.slots[1].exit_status != 7) {
+        return 2;
+    }
+
+    return 0;
+}
+
+/* Test: the exact exit_status value is preserved through exit_status(). */
+static int test_wait_exit_status_value(void) {
+    muzix_kernel_proc_table_t t;
+    muzix_mproc_t parent_proc;
+    muzix_mproc_t child_proc;
+    process_map_t kernel_map = {{7, 7, 7, 7}};
+    process_map_t map_p = {{1, 2, 3, 3}};
+    process_map_t map_c = {{4, 5, 6, 3}};
+
+    memset(&t, 0, sizeof(t));
+    muzix_mproc_init(&parent_proc, 0x0000u, 0x1000u, 0x2000u, 0x1000u, 0x1000u, 0x1000u, 10);
+    muzix_mproc_init(&child_proc, 0x3000u, 0x4000u, 0x5000u, 0x1000u, 0x1000u, 0x1000u, 20);
+    muzix_proc_table_init(&t, &kernel_map);
+
+    muzix_proc_table_register(&t, 0, 10, &parent_proc, &map_p,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+    muzix_proc_table_register(&t, 1, 20, &child_proc, &map_c,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+
+    /* Exit with status 0 */
+    if (muzix_proc_table_exit_status(&t, 1, 10, 0) != 0) {
+        return 1;
+    }
+    if (t.slots[1].exit_status != 0 || !t.slots[1].exited) {
+        return 2;
+    }
+
+    /* Reuse the slot for another child with status 255 */
+    t.slots[1] = t.slots[0]; /* copy parent as template */
+    t.slots[1].pid = 21;
+    t.slots[1].ready_q = MUZIX_PROC_USER_Q;
+    t.slots[1].p_flags = MUZIX_PROC_NO_MAP;
+    t.slots[1].map.pages[0] = 0;
+    t.slots[1].map.pages[1] = 0;
+    t.slots[1].map.pages[2] = 0;
+    t.slots[1].map.pages[3] = 0;
+    t.slots[1].parent_pid = 10;
+    t.slots[1].exit_status = 0;
+    t.slots[1].exited = 0;
+    t.slots[1].active = 1;
+    t.slots[1].pending_signals = 0;
+    t.slots[1].user_time = 0;
+    t.slots[1].sys_time = 0;
+    t.slots[1].child_user_time = 0;
+    t.slots[1].child_sys_time = 0;
+    t.slots[1].tick_deadline_valid = 0u;
+    t.slots[1].next_ready = -1;
+    t.slots[1].owned_count = 0;
+    t.slots[1].owned_pages[0] = 0;
+    t.slots[1].owned_pages[1] = 0;
+    t.slots[1].name[0] = '\0';
+    t.slots[1].resume_valid = 0;
+
+    if (muzix_proc_table_exit_status(&t, 1, 10, 255) != 0) {
+        return 3;
+    }
+    if (t.slots[1].exit_status != 255 || !t.slots[1].exited) {
+        return 4;
+    }
+
+    return 0;
+}
+
+/* Test: a parent whose pid does not match the child's parent_pid is not
+ * woken when the child exits. */
+static int test_wait_other_parent_not_woken(void) {
+    muzix_kernel_proc_table_t t;
+    muzix_mproc_t parent_a;
+    muzix_mproc_t parent_b;
+    muzix_mproc_t child_proc;
+    process_map_t kernel_map = {{7, 7, 7, 7}};
+    process_map_t map_p = {{1, 2, 3, 3}};
+    process_map_t map_c = {{4, 5, 6, 3}};
+
+    memset(&t, 0, sizeof(t));
+    muzix_mproc_init(&parent_a, 0x0000u, 0x1000u, 0x2000u, 0x1000u, 0x1000u, 0x1000u, 10);
+    muzix_mproc_init(&parent_b, 0x3000u, 0x4000u, 0x5000u, 0x1000u, 0x1000u, 0x1000u, 20);
+    muzix_mproc_init(&child_proc, 0x5000u, 0x6000u, 0x7000u, 0x1000u, 0x1000u, 0x1000u, 30);
+    muzix_proc_table_init(&t, &kernel_map);
+
+    /* Slot 0: parent A, pid 10, parked waiting. */
+    muzix_proc_table_register(&t, 0, 10, &parent_a, &map_p,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+    t.slots[0].p_flags |= MUZIX_PROC_WAIT_TICK;
+    t.slots[0].tick_deadline_valid = 0u;
+    t.slots[0].tick_stamp = 0xFFFFu;
+    muzix_proc_table_unlink(&t, 0);
+
+    /* Slot 1: parent B, pid 20, also parked waiting. */
+    muzix_proc_table_register(&t, 1, 20, &parent_b, &map_p,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+    t.slots[1].p_flags |= MUZIX_PROC_WAIT_TICK;
+    t.slots[1].tick_deadline_valid = 0u;
+    t.slots[1].tick_stamp = 0xFFFFu;
+    muzix_proc_table_unlink(&t, 1);
+
+    /* Slot 2: child, pid 30, parent_pid = 10 (parent A). */
+    muzix_proc_table_register(&t, 2, 30, &child_proc, &map_c,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+
+    /* Child exits; only parent A (pid 10) should be woken. */
+    if (muzix_proc_table_exit_status(&t, 2, 10, 0) != 0) {
+        return 1;
+    }
+
+    /* Parent A: WAIT_TICK cleared, readied. */
+    if ((t.slots[0].p_flags & MUZIX_PROC_WAIT_TICK) != 0u) {
+        return 2;
+    }
+    if (!muzix_proc_is_ready(&t, 0)) {
+        return 3;
+    }
+
+    /* Parent B: still parked, WAIT_TICK still set, not readied. */
+    if ((t.slots[1].p_flags & MUZIX_PROC_WAIT_TICK) == 0u) {
+        return 4;
+    }
+    if (muzix_proc_is_ready(&t, 1)) {
+        return 5;
+    }
+
+    return 0;
+}
+
+/* Test: the boundary condition - child exit between wait's scan and park.
+ * With the fix, exit_status() sets exited=1 before wake, and the atomic
+ * scan-and-park in muzix_handle_wait() (di/ei around scan+park) prevents
+ * the child from exiting in the gap.  At the proc_table level this means:
+ * exit_status() produces a fully-formed zombie (exited=1 set) before it
+ * attempts to wake any parked parent. */
+static int test_wait_race_boundary(void) {
+    muzix_kernel_proc_table_t t;
+    muzix_mproc_t parent_proc;
+    muzix_mproc_t child_proc;
+    process_map_t kernel_map = {{7, 7, 7, 7}};
+    process_map_t map_p = {{1, 2, 3, 3}};
+    process_map_t map_c = {{4, 5, 6, 3}};
+
+    memset(&t, 0, sizeof(t));
+    muzix_mproc_init(&parent_proc, 0x0000u, 0x1000u, 0x2000u, 0x1000u, 0x1000u, 0x1000u, 10);
+    muzix_mproc_init(&child_proc, 0x3000u, 0x4000u, 0x5000u, 0x1000u, 0x1000u, 0x1000u, 20);
+    muzix_proc_table_init(&t, &kernel_map);
+
+    /* Slot 0: parent, pid 10. */
+    muzix_proc_table_register(&t, 0, 10, &parent_proc, &map_p,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+    /* Slot 1: child, pid 20, parent_pid = 10. */
+    muzix_proc_table_register(&t, 1, 20, &child_proc, &map_c,
+                              MUZIX_PROC_USER_Q, MUZIX_PROC_FREE);
+    t.slots[1].parent_pid = 10;
+
+    /* Simulate the parent's scan: no zombie yet. */
+    int zombie_before = 0;
+    for (int i = 0; i < MUZIX_PROC_TABLE_MAX; i++) {
+        if (t.slots[i].exited && t.slots[i].parent_pid == 10) {
+            zombie_before = 1;
+            break;
+        }
+    }
+    if (zombie_before) {
+        return 1;
+    }
+
+    /* Child exits (as if it happened between scan and park). */
+    if (muzix_proc_table_exit_status(&t, 1, 10, 17) != 0) {
+        return 2;
+    }
+
+    /* After exit, the child is a zombie: exited=1, exit_status=17. */
+    if (!t.slots[1].exited || t.slots[1].exit_status != 17) {
+        return 3;
+    }
+
+    /* Parent is parked and woken by the exit path.  Parent rescans and
+     * finds the zombie - no lost wakeup. */
+    if ((t.slots[0].p_flags & MUZIX_PROC_WAIT_TICK) != 0u) {
+        return 4;
+    }
+    int zombie_after = 0;
+    for (int i = 0; i < MUZIX_PROC_TABLE_MAX; i++) {
+        if (t.slots[i].exited && t.slots[i].parent_pid == 10) {
+            zombie_after = 1;
+            break;
+        }
+    }
+    if (!zombie_after) {
+        return 5;
+    }
+
+    return 0;
+}
+
+int
+main(void) {
     int rc = test_park_and_wake();
 
     if (rc != 0) {
@@ -600,6 +909,27 @@ int main(void)
 
     if (rc != 0) {
         return 200 + rc;
+    }
+
+    rc = test_exit_status_zombie_before_wake();
+    if (rc != 0) {
+        return 300 + rc;
+    }
+    rc = test_wait_scan_finds_already_exited();
+    if (rc != 0) {
+        return 400 + rc;
+    }
+    rc = test_wait_exit_status_value();
+    if (rc != 0) {
+        return 500 + rc;
+    }
+    rc = test_wait_other_parent_not_woken();
+    if (rc != 0) {
+        return 600 + rc;
+    }
+    rc = test_wait_race_boundary();
+    if (rc != 0) {
+        return 700 + rc;
     }
 
     return test_proc_table();

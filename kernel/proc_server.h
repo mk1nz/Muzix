@@ -1,8 +1,7 @@
 #ifndef MUZIX_PROC_SERVER_H
 #define MUZIX_PROC_SERVER_H
 
-#include <stdint.h>
-#include <stddef.h>
+#include "ztypes.h"
 
 #include "proc_table.h"
 

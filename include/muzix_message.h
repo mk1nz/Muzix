@@ -1,8 +1,6 @@
 #ifndef MUZIX_MESSAGE_H
 #define MUZIX_MESSAGE_H
-
-#include <stdint.h>
-
+#include <ztypes.h>
 typedef struct {
     uint8_t m_type;
     uint8_t source;
@@ -19,6 +17,5 @@ typedef struct {
     uint16_t src_vir;
     uint16_t dst_vir;
     uint16_t byte_count;
-} muzix_system_message_t;
-
+}muzix_system_message_t;
 #endif

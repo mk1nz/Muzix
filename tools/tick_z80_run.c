@@ -32,10 +32,10 @@
  * cannot pass.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
+#include "libc.h"
+#include "libc.h"
+#include "libc.h"
+#include "ztypes.h"
 
 #include "z80.h"
 
@@ -51,8 +51,8 @@ static unsigned      w0_addr[64];
 static unsigned      w0_val[64];
 static unsigned      nw0;
 
-static uint8_t rd(void *u, uint16_t a)
-{
+static uint8_t
+rd(void *u, uint16_t a) {
     (void)u;
     if (a < 0x4000) {
         w0_reads++;
@@ -65,8 +65,8 @@ static uint8_t pin(z80 *u, uint8_t p) { (void)u; (void)p; return 0xFF; }
 static void    pout(z80 *u, uint8_t p, uint8_t v) { (void)u; (void)p; (void)v; }
 static struct z80 cpu;
 
-static void load(const char *f)
-{
+static void
+load(const char *f) {
     memset(mem, 0, 65536);
     /* window 0 and everything above the two linked areas get a marker, so a
      * byte the image does not account for reads as the marker and not as a
@@ -116,13 +116,13 @@ static uint32_t r32(unsigned a) { return (uint32_t)r16(a) | ((uint32_t)r16(a + 2
 
 static unsigned A_caseval, A_deadline, A_aptcnt, A_aptstamp, A_aptnow;
 static unsigned A_resnow, A_resexp, A_resapt, A_resstamp, A_resstampout, A_resisr;
-static unsigned A_ctl, A_start;
+static unsigned A_ctl, A_start, A_iff_state, A_stval;
 static const char *img;
 
 static unsigned failures;
 
-static void run(void)
-{
+static void
+run(void) {
     w0_reads = 0;
     nw0 = 0;
     z80_init(&cpu);
@@ -138,14 +138,14 @@ static void run(void)
     }
 }
 
-static void fail(const char *what)
-{
+static void
+fail(const char *what) {
     printf("      FAIL  %s\n", what);
     failures++;
 }
 
-int main(int argc, char **argv)
-{
+int
+main(int argc, char **argv) {
     unsigned i;
     const char *map;
 
@@ -168,6 +168,8 @@ int main(int argc, char **argv)
     A_resisr      = sym(map, "h_resisr");
     A_ctl         = sym(map, "_muzix_tick_count");
     A_start       = sym(map, "_start");
+    A_iff_state   = sym(map, "h_iff_state");
+    A_stval       = sym(map, "h_stval");
 
     /* ---- muzix_tick_now: the 16-bit return is in DE --------------------- */
     {
@@ -235,7 +237,7 @@ int main(int argc, char **argv)
          * own wrap, one is large enough that the inflation factor is visible
          * in the answer, and the last two are the cheap cases a fix has to get
          * right too. */
-        static const struct { uint32_t cnt; uint16_t stamp, now; } APT[8] = {
+        static const struct { uint32_t cnt; uint16_t stamp, now; } APT[10] = {
             { 0x00000000u, 0x0002u, 0x0005u },
             { 0x0000FFFFu, 0x1231u, 0x1234u },
             { 0x00000000u, 0x7FFDu, 0x8000u },
@@ -244,9 +246,11 @@ int main(int argc, char **argv)
             { 0x00000000u, 0x0410u, 0x0411u },
             { 0x00000000u, 0x0001u, 0xFFFFu },
             { 0x00000000u, 0x4000u, 0x4000u },
+            { 0x00000000u, 0x0000u, 0x00FFu },
+            { 0x00000000u, 0x0000u, 0x0100u },
         };
         printf("      muzix_tick_add_process_time (counter in HL, stamp in DE):\n");
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < 10; i++) {
             uint32_t before = APT[i].cnt;
             uint32_t want   = before + (uint16_t)(APT[i].now - APT[i].stamp);
             uint32_t after;
@@ -260,6 +264,7 @@ int main(int argc, char **argv)
             mem[A_aptstamp + 1]= (uint8_t)(APT[i].stamp >> 8);
             mem[A_aptnow]     = (uint8_t)(APT[i].now & 0xFFu);
             mem[A_aptnow + 1] = (uint8_t)(APT[i].now >> 8);
+            mem[A_iff_state]  = (i >= 8) ? 1u : 0u;   /* boundary cases enter with EI */
             run();
             after   = r32(A_resapt);
             stamp2  = r16(A_resstamp);
@@ -278,6 +283,8 @@ int main(int argc, char **argv)
 
     /* ---- the stamp store and the handler, which the readers rely on ----- */
     load(img);
+    mem[A_stval] = 0x34;
+    mem[A_stval + 1] = 0x12;
     run();
     printf("      muzix_tick_stamp_store at 0x1234, and the ISR from 0x00FE:\n");
     if (mem[A_resstampout] != 0x34 || mem[A_resstampout + 1] != 0x12) {
@@ -286,6 +293,29 @@ int main(int argc, char **argv)
                mem[A_resstampout], mem[A_resstampout + 1]);
         failures++;
     }
+
+    /* stamp_store at the rollover boundary: counter at 0x00FF.
+     * A torn read here would return 0x01FF (low from before the roll,
+     * high from after) instead of 0x00FF or 0x0100.  Run both interrupt
+     * entry states to confirm state preservation does not change the value. */
+    {
+        static const uint16_t STS[] = { 0x00FFu, 0x0100u, 0xFFFEu, 0xFFFFu };
+        for (i = 0; i < 4; i++) {
+            load(img);
+            mem[A_stval] = (uint8_t)(STS[i] & 0xFFu);
+            mem[A_stval + 1] = (uint8_t)(STS[i] >> 8);
+            mem[A_iff_state] = (i & 1u) ? 1u : 0u;   /* alternate DI/EI */
+            run();
+            if (mem[A_resstampout] != (uint8_t)(STS[i] & 0xFFu) ||
+                mem[A_resstampout + 1] != (uint8_t)(STS[i] >> 8)) {
+                printf("      FAIL  stamp_store at %04X with %s: got %02X %02X\n",
+                       STS[i], (i & 1u) ? "EI" : "DI",
+                       mem[A_resstampout], mem[A_resstampout + 1]);
+                failures++;
+            }
+        }
+    }
+
     if (mem[A_resisr] != 0x01 || mem[A_resisr + 1] != 0x01) {
         printf("      FAIL  three ticks from 0x00FE gave %02X %02X, expected 01 01\n",
                mem[A_resisr], mem[A_resisr + 1]);
@@ -313,6 +343,6 @@ int main(int argc, char **argv)
         printf("      tick_z80: %d assertion(s) failed\n", failures);
         return 1;
     }
-    printf("      tick_z80: 26 cases, 0 wrong, 0 window-0 reads\n");
+    printf("      tick_z80: 32 cases, 0 wrong, 0 window-0 reads\n");
     return 0;
 }

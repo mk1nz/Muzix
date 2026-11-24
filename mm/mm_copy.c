@@ -33,9 +33,7 @@ int muzix_mm_copy_maps(muzix_mm_service_t *mm,
         return MUZIX_COPY_EFAULT;
     }
 
-    if (bytes > sizeof(tmp)) {
-        return MUZIX_COPY_EFAULT;
-    }
+    if (bytes > sizeof(tmp)) return MUZIX_COPY_EFAULT;
 
     /* Both maps are derived from the mprocs, so the window each virtual address
      * resolves to is the one the owning process actually runs on. Reject the
@@ -146,20 +144,14 @@ int muzix_mm_copy_user_to_user(muzix_mm_service_t *mm,
     muzix_proc_slot_t *src_slot;
     muzix_proc_slot_t *dst_slot;
 
-    if (!mm || bytes == 0 || bytes > sizeof(staging)) {
-        return -1;
-    }
-    if (src_proc >= MUZIX_PROC_TABLE_MAX || dst_proc >= MUZIX_PROC_TABLE_MAX) {
-        return -1;
-    }
+    if (!mm || bytes == 0 || bytes > sizeof(staging)) return -1;
+    if (src_proc >= MUZIX_PROC_TABLE_MAX || dst_proc >= MUZIX_PROC_TABLE_MAX) return -1;
 
     table = &g_loop_ptr->system.startup.proc_table;
     src_slot = &table->slots[src_proc];
     dst_slot = &table->slots[dst_proc];
 
-    if (!src_slot->active || !dst_slot->active) {
-        return -1;
-    }
+    if (!src_slot->active || !dst_slot->active) return -1;
 
     /*
      * Resolve through slot->map - the map the scheduler actually installs -
@@ -214,9 +206,7 @@ int muzix_mm_copy_kernel_to_map(muzix_mm_service_t *mm,
     /* &mm->zeta is never NULL even when mm is, so the primitive's own state
      * check cannot see a bad mm; only this can. The map and the buffer are the
      * primitive's to check - it refuses both by pointer. */
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     /* The scheduler's state, not mm->zeta.  muzix_mm_copy_user_to_user() above
      * spells out why: zeta_init() leaves mm->zeta->bank_reg holding the kernel
      * map, the primitives restore the map they saved through state->bank_reg,
@@ -240,9 +230,7 @@ int muzix_mm_copy_map_to_kernel(muzix_mm_service_t *mm,
      * are the primitive's to refuse, and both of its kernel-window refusals
      * (region 0 is the kernel's own page, region 3 is _DATA and the C stack)
      * still apply to a caller that asks for a user's stack. */
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     return zeta_copy_user_to_kernel(&g_zeta_state, map, vir, (uint8_t *)buf,
                                     (size_t)len);
 }
@@ -252,32 +240,22 @@ int muzix_mm_handle_copy_kernel_to_user(muzix_system_service_t *svc,
 {
     muzix_kernel_loop_t *loop;
 
-    if (!svc) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!svc) return MUZIX_SYS_SERVICE_ERR;
     loop = (muzix_kernel_loop_t *)svc->loop;
     muzix_kernel_proc_table_t *table;
     muzix_mm_service_t *mm;
     process_map_t dst_map;
     uint8_t region;
 
-    if (!msg || msg->dst_proc >= MUZIX_PROC_TABLE_MAX || msg->byte_count == 0) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!msg || msg->dst_proc >= MUZIX_PROC_TABLE_MAX || msg->byte_count == 0) return MUZIX_SYS_SERVICE_ERR;
 
-    if (!loop) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!loop) return MUZIX_SYS_SERVICE_ERR;
 
     table = &loop->system.startup.proc_table;
-    if (!table->slots[msg->dst_proc].active) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!table->slots[msg->dst_proc].active) return MUZIX_SYS_SERVICE_ERR;
 
     mm = loop->mm;
-    if (!mm || !msg->mem_ptr) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!mm || !msg->mem_ptr) return MUZIX_SYS_SERVICE_ERR;
 
     /* Use the slot's process map, which is what muzix_zeta_enter_userspace()
      * and the context switcher install.  Deriving a map from mproc instead
@@ -317,9 +295,7 @@ int muzix_mm_handle_copy_page_to_kernel(muzix_system_service_t *svc,
 {
     muzix_kernel_loop_t *loop;
 
-    if (!svc) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!svc) return MUZIX_SYS_SERVICE_ERR;
     loop = (muzix_kernel_loop_t *)svc->loop;
     muzix_mm_service_t *mm;
     uint8_t region, page;
@@ -327,14 +303,10 @@ int muzix_mm_handle_copy_page_to_kernel(muzix_system_service_t *svc,
     void *dst;
     uint16_t len;
 
-    if (!loop || !msg) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!loop || !msg) return MUZIX_SYS_SERVICE_ERR;
 
     mm = loop->mm;
-    if (!mm) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!mm) return MUZIX_SYS_SERVICE_ERR;
     region = (uint8_t)msg->proc1;
     page = (uint8_t)msg->proc2;
     offset = msg->src_vir;
@@ -373,9 +345,7 @@ int muzix_mm_handle_copy_user_to_kernel(muzix_system_service_t *svc,
 {
     muzix_kernel_loop_t *loop;
 
-    if (!svc) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!svc) return MUZIX_SYS_SERVICE_ERR;
     loop = (muzix_kernel_loop_t *)svc->loop;
     muzix_mm_service_t *mm;
     muzix_kernel_proc_table_t *table;
@@ -386,9 +356,7 @@ int muzix_mm_handle_copy_user_to_kernel(muzix_system_service_t *svc,
     uint16_t len;
     process_map_t src_map;
 
-    if (!loop || !msg) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!loop || !msg) return MUZIX_SYS_SERVICE_ERR;
 
     mm = loop->mm;
     table = &loop->system.startup.proc_table;
@@ -397,14 +365,10 @@ int muzix_mm_handle_copy_user_to_kernel(muzix_system_service_t *svc,
     kernel_buf = (void *)(uintptr_t)msg->dst_vir;
     len = msg->byte_count;
 
-    if (!kernel_buf || src_proc >= MUZIX_PROC_TABLE_MAX) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!kernel_buf || src_proc >= MUZIX_PROC_TABLE_MAX) return MUZIX_SYS_SERVICE_ERR;
 
     slot = &table->slots[src_proc];
-    if (!slot->active) {
-        return MUZIX_SYS_SERVICE_ERR;
-    }
+    if (!slot->active) return MUZIX_SYS_SERVICE_ERR;
 
     muzix_mproc_to_zeta_map(&slot->mproc, &src_map);
 

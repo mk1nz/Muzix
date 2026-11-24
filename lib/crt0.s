@@ -7,7 +7,15 @@
 .globl s__INITIALIZER
 .globl s__DATA
 .globl l__DATA
+.globl _muzix_stdout_hook
 .globl start
+
+; Stdout flush hook, lives in _DATA so crt0's memset_bss zeroes it at startup.
+; exit() calls it when non-NULL, so a program that never printed does not pull
+; stdout.rel in; a program that printed (via putchar/puts/printf) sets it.
+.area _DATA
+_muzix_stdout_hook:
+    .dw 0
 
 .area _CODE
 

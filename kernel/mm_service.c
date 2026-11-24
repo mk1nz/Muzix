@@ -65,10 +65,10 @@
 
 extern muzix_kernel_loop_t *g_loop_ptr;
 
-void muzix_mm_service_init(muzix_mm_service_t *mm,
-                           struct muzix_system_task_t *system_task,
-                           uint8_t source)
-{
+void
+muzix_mm_service_init(muzix_mm_service_t *mm,
+                      struct muzix_system_task_t *system_task,
+                      uint8_t source) {
     if (!mm) return;
     mm->system_task = system_task;
     mm->source = source;
@@ -76,42 +76,42 @@ void muzix_mm_service_init(muzix_mm_service_t *mm,
     zeta_init(&mm->zeta);
 }
 
-int muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page)
-{
+int
+muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page) {
     (void)mm;
     if (!page) return -1;
     return zeta_memory_alloc_page(page);
 }
 
-void muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page)
-{
+void
+muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page) {
     (void)mm;
     zeta_memory_release_page(page);
 }
 
-void muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_map)
-{
+void
+muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_map) {
     (void)mm;
     zeta_memory_init(kernel_map);
 }
 
-int muzix_mm_newmap(muzix_mm_service_t *mm, uint8_t proc_slot, uint16_t map_ptr)
-{
+int
+muzix_mm_newmap(muzix_mm_service_t *mm, uint8_t proc_slot, uint16_t map_ptr) {
     (void)mm;
     (void)proc_slot;
     (void)map_ptr;
     return -1;
 }
 
-int muzix_mm_copy(muzix_mm_service_t *mm,
-                  uint8_t src_proc,
-                  uint8_t src_seg,
-                  uint16_t src_vir,
-                  uint8_t dst_proc,
-                  uint8_t dst_seg,
-                  uint16_t dst_vir,
-                  uint16_t byte_count)
-{
+int
+muzix_mm_copy(muzix_mm_service_t *mm,
+              uint8_t src_proc,
+              uint8_t src_seg,
+              uint16_t src_vir,
+              uint8_t dst_proc,
+              uint8_t dst_seg,
+              uint16_t dst_vir,
+              uint16_t byte_count) {
     (void)mm;
     (void)src_proc;
     (void)src_seg;
@@ -123,12 +123,12 @@ int muzix_mm_copy(muzix_mm_service_t *mm,
     return -1;
 }
 
-int muzix_mm_copy_kernel_to_user(muzix_mm_service_t *mm,
-                                  uint8_t dst_proc,
-                                  uint16_t dst_vir,
-                                  const void *kernel_buf,
-                                  uint16_t byte_count)
-{
+int
+muzix_mm_copy_kernel_to_user(muzix_mm_service_t *mm,
+                             uint8_t dst_proc,
+                             uint16_t dst_vir,
+                             const void *kernel_buf,
+                             uint16_t byte_count) {
     if (!mm || !kernel_buf || byte_count == 0) return -1;
 
     /* Use the process map of the destination process.  The slot number is a
@@ -145,29 +145,29 @@ int muzix_mm_copy_kernel_to_user(muzix_mm_service_t *mm,
     return zeta_copy_kernel_to_user(&mm->zeta, &slot->map, dst_vir, kernel_buf, (size_t)byte_count);
 }
 
-int muzix_mm_load_map(muzix_mm_service_t *mm,
-                      uint8_t proc,
-                      const process_map_t *map)
-{
+int
+muzix_mm_load_map(muzix_mm_service_t *mm,
+                  uint8_t proc,
+                  const process_map_t *map) {
     (void)mm;
     (void)proc;
     (void)map;
     return -1;
 }
 
-int muzix_mm_load_kernel_map(muzix_mm_service_t *mm,
-                             const process_map_t *map)
-{
+int
+muzix_mm_load_kernel_map(muzix_mm_service_t *mm,
+                         const process_map_t *map) {
     (void)mm;
     (void)map;
     return -1;
 }
 
-int muzix_mm_cross_bank_call(muzix_mm_service_t *mm,
-                             const process_map_t *target_map,
-                             int (*func)(void *),
-                             void *arg)
-{
+int
+muzix_mm_cross_bank_call(muzix_mm_service_t *mm,
+                         const process_map_t *target_map,
+                         int (*func)(void *),
+                         void *arg) {
     (void)mm;
     (void)target_map;
     (void)func;
@@ -175,12 +175,12 @@ int muzix_mm_cross_bank_call(muzix_mm_service_t *mm,
     return -1;
 }
 
-int muzix_mm_copy_page_to_kernel(muzix_mm_service_t *mm,
-                                  uint8_t page,
-                                  uint16_t offset,
-                                  void *dst,
-                                  uint16_t len)
-{
+int
+muzix_mm_copy_page_to_kernel(muzix_mm_service_t *mm,
+                             uint8_t page,
+                             uint16_t offset,
+                             void *dst,
+                             uint16_t len) {
     (void)mm;
     (void)page;
     (void)offset;
@@ -189,12 +189,12 @@ int muzix_mm_copy_page_to_kernel(muzix_mm_service_t *mm,
     return -1;
 }
 
-int muzix_mm_copy_user_to_kernel(muzix_mm_service_t *mm,
-                                   uint8_t src_proc,
-                                   uint16_t src_vir,
-                                   void *kernel_buf,
-                                   uint16_t len)
-{
+int
+muzix_mm_copy_user_to_kernel(muzix_mm_service_t *mm,
+                             uint8_t src_proc,
+                             uint16_t src_vir,
+                             void *kernel_buf,
+                             uint16_t len) {
     if (!mm || !kernel_buf || len == 0) return -1;
 
     if (!g_loop_ptr) return -1;
@@ -210,12 +210,12 @@ int muzix_mm_copy_user_to_kernel(muzix_mm_service_t *mm,
     return zeta_copy_user_to_kernel(&mm->zeta, &slot->map, src_vir, kernel_buf, len);
 }
 
-int muzix_mm_copy_rom_page_to_kernel(muzix_mm_service_t *mm,
-                                        uint8_t page,
-                                        uint16_t offset,
-                                        void *dst,
-                                        uint16_t len)
-{
+int
+muzix_mm_copy_rom_page_to_kernel(muzix_mm_service_t *mm,
+                                 uint8_t page,
+                                 uint16_t offset,
+                                 void *dst,
+                                 uint16_t len) {
     /* The inverted order this used to be - `zeta_state_t *state = &mm->zeta;
      * if (!state || !mm)` - tested mm after dereferencing it, so a NULL mm
      * crashed on the line that was supposed to reject it.  &mm->zeta is a
@@ -226,17 +226,12 @@ int muzix_mm_copy_rom_page_to_kernel(muzix_mm_service_t *mm,
     return zeta_copy_rom_page_to_kernel(&mm->zeta, page, offset, (uint8_t *)dst, (size_t)len);
 }
 
-void muzix_mm_refresh_visible(muzix_mm_service_t *mm)
-{
-    (void)mm;
-}
-
-void *muzix_mm_service_create(void)
-{
+void *
+muzix_mm_service_create(void) {
     return 0;
 }
 
-void muzix_mm_service_destroy(void *mm)
-{
+void
+muzix_mm_service_destroy(void *mm) {
     (void)mm;
 }

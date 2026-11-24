@@ -2,7 +2,7 @@
 #include "../include/muzix_ipc.h"
 #include "proc_table.h"
 #include "exec_loader.h"
-#include <string.h>
+#include "libc.h"
 #include "../lib/syscall.h"
 
 #include "../platform/zeta-v2/trace.h"
@@ -10,6 +10,10 @@
 #include "load.h"
 #include "../mm/mm_service.h"
 #include "rom_read.h"
+#include "socket_service.h"
+#include "socket_manager.h"
+#include "../platform/zeta-v2/w5100.h"
+#include "kernel_loop.h"
 
 /*
  * Which server a userspace syscall is routed to.
@@ -139,45 +143,28 @@ static void muzix_syscalls_deliver_parked(muzix_userspace_syscall_context_t *ctx
     muzix_ipc_message_t msg;
     int client;
 
+    muzix_trace_write("deliver:");
+    muzix_trace_hex8((uint8_t)woken_slot);
+    muzix_trace_write("\r\n");
+
     if (woken_slot <= 0 || woken_slot >= MUZIX_PROC_TABLE_MAX) {
+        muzix_trace_write("deliver skip bad slot\r\n");
         return;
     }
     rp = muzix_ipc_proc(&g_ipc, (int16_t)woken_slot);
     if (!rp) {
+        muzix_trace_write("deliver skip no rp\r\n");
         return;
     }
     if (!(rp->p_flags & MUZIX_IPC_FLAG_DELIVERED)) {
+        muzix_trace_write("deliver skip not delivered\r\n");
         return;
     }
 
     msg = rp->p_msg;
     client = rp->p_msg.m_source;
 
-    /*
-     * RECORD WHO SENT THIS, ON THE WOKEN PROCESS, BEFORE IT RUNS.
-     *
-     * ipc_client is what SYS_IPC_SRV_COPY_*_CLIENT copy through, and it was
-     * never set for a server that parked to receive: the only writer was the
-     * tail of muzix_handle_ipc_sendrec(), which sits below the park's
-     * `return 0` and so never executes - the frame is abandoned when
-     * muzix_kernel_switchout() hands the processor away.  g_loop is
-     * zero-initialised, so slots[FS].ipc_client held 0 for the shell's very
-     * first write, the SRV_COPY handler refused it as "no client", and the byte
-     * never left the shell's stack.  That is the whole of the silent banner.
-     *
-     * It is worse than a constant zero, which is why this is not a one-line
-     * copy fix.  When the FS server later sends its own REPLY, the same tail
-     * does run, and stamps slots[FS].ipc_client with msg.m_source - which on
-     * that path is the FS server's own slot.  So after the first exchange
-     * every server-to-client copy resolved the client's address against the
-     * SERVER's map, which is the same silent-garbage class as the one-sided
-     * "user to kernel" copy that preceded it.
-     *
-     * Stamping it here, from the delivered message's own m_source, closes both:
-     * the value is the real sender, it is written while the frame that knows
-     * it is still live, and it lands before the woken process can issue any
-     * copy that depends on it.
-     */
+    /* RECORD WHO SENT THIS, ON THE WOKEN PROCESS, BEFORE IT RUNS. */
     if (client >= 0 && client < MUZIX_PROC_TABLE_MAX && table) {
         table->slots[woken_slot].ipc_client = (uint8_t)client;
     }
@@ -226,15 +213,16 @@ static void muzix_syscalls_deliver_parked(muzix_userspace_syscall_context_t *ctx
     }
 
     if (rp->p_user_addr != 0) {
-        /* Both are userspace addresses, so both halves go through the MM's
-         * map-to-map copy - the same one the servers use, and never a
-         * single-sided primitive whose "kernel_buf" would be this process's
-         * stack while the client's page is installed in that window. */
+        muzix_trace_write("deliver copy to uaddr:");
+        muzix_trace_hex8((uint8_t)(rp->p_user_addr & 0xff));
+        muzix_trace_write("\r\n");
         if (muzix_copy_to_proc(ctx, (uint8_t)woken_slot, rp->p_user_addr,
                                (const uint8_t *)&msg, sizeof(msg)) != 0) {
-            /* Refused: leave DELIVERED set so the collect path still works. */
+            muzix_trace_write("deliver copy fail\r\n");
             return;
         }
+    } else {
+        muzix_trace_write("deliver no uaddr\r\n");
     }
 
     /*
@@ -339,7 +327,7 @@ static int32_t muzix_handle_ipc_send(
 
     table = &ctx->kernel->loop->system.startup.proc_table;
     current_slot = muzix_current_slot(ctx);
-
+    
     if (current_slot < 0) {
         return -1;
     }
@@ -358,6 +346,14 @@ static int32_t muzix_handle_ipc_send(
     /* The sender is whoever is sending, not the requester this is a reply to */
     msg.m_source = ipc_slot;
 
+    muzix_trace_write("send:");
+    muzix_trace_hex8((uint8_t)ipc_slot);
+    muzix_trace_write("->");
+    muzix_trace_hex8((uint8_t)dest_slot);
+    muzix_trace_write(" type=");
+    muzix_trace_hex8((uint8_t)(msg.m_type & 0xff));
+    muzix_trace_write("\r\n");
+
     if (current_slot >= 0 && current_slot < MUZIX_PROC_TABLE_MAX) {
         g_route_msg[current_slot] = msg;
         result = muzix_ipc_send(&g_ipc, ipc_slot, dest_slot, &g_route_msg[current_slot]);
@@ -365,17 +361,15 @@ static int32_t muzix_handle_ipc_send(
         result = -1;
     }
     if (result < 0) {
+        muzix_trace_write("send fail\r\n");
         return result;
     }
 
     if (result >= 10) {
-        /* A process was woken by the delivery.  It has to be readied in the
-         * KERNEL process table as well as the IPC table, or pick_next() never
-         * dispatches it - the same decode the sendrec handler's else branch
-         * performs, and muzix_syscalls_deliver_parked() copies the message into
-         * the woken process's own buffer and stamps its resume value while
-         * this frame is still live. */
         int woken_slot = result - 10;
+        muzix_trace_write("send woke:");
+        muzix_trace_hex8((uint8_t)woken_slot);
+        muzix_trace_write("\r\n");
         if (woken_slot >= 0 && woken_slot < MUZIX_PROC_TABLE_MAX) {
             muzix_syscalls_deliver_parked(ctx, woken_slot);
             muzix_proc_table_ready(table, woken_slot);
@@ -413,11 +407,11 @@ static int32_t muzix_handle_ipc_send(
 
 #define MUZIX_EXEC_PATH_MAX   128
 #define MUZIX_EXEC_ARGV_MAX   16
-#define MUZIX_EXEC_ARG_MAX    64
+#define MUZIX_EXEC_ARENA_SIZE 512
 
 static char muzix_exec_path_buf[MUZIX_EXEC_PATH_MAX];
 static const char *muzix_exec_argv_kernel[MUZIX_EXEC_ARGV_MAX + 1];
-static char muzix_exec_arg_pool[MUZIX_EXEC_ARGV_MAX][MUZIX_EXEC_ARG_MAX];
+static char muzix_exec_arg_arena[MUZIX_EXEC_ARENA_SIZE];
 
 /* ---- SYS_FORK -------------------------------------------------------------
  *
@@ -739,6 +733,33 @@ static int32_t muzix_handle_signal(muzix_userspace_syscall_context_t *ctx,
                : -1;
 }
 
+/* ---- SYS_CHECK_SIGNAL ----------------------------------------------------
+ *
+ * Returns the pending signal bitmask for the calling process without
+ * delivering it.  Userspace can poll this to learn it is about to be killed
+ * and clean up resources (close sockets, etc.) before calling sys_exit().
+ * Bit n-1 is set if signal n is pending (signals 1..16).
+ * Returns -1 on error.
+ */
+static int32_t
+muzix_handle_check_signal(muzix_userspace_syscall_context_t *ctx)
+{
+    muzix_kernel_proc_table_t *table;
+    int slot;
+
+    if (!ctx || !ctx->kernel || !ctx->kernel->loop || ctx->pid < 0) {
+        return -1;
+    }
+
+    table = &ctx->kernel->loop->system.startup.proc_table;
+    slot = muzix_current_slot(ctx);
+    if (slot < 0 || slot >= MUZIX_PROC_TABLE_MAX) {
+        return -1;
+    }
+
+    return (int32_t)table->slots[slot].pending_signals;
+}
+
 /* ---- SYS_EXIT and SYS_WAIT -----------------------------------------------
  *
  * The kernel's own end-of-process pair.
@@ -781,7 +802,6 @@ static int muzix_handle_exit(muzix_userspace_syscall_context_t *ctx,
     }
 
     parent_pid = table->slots[slot].parent_pid;
-
 
     /* The pages first, while the slot still says it owns them: exit_status()
      * records the zombie on a slot that has already been unlinked, and a page
@@ -834,6 +854,20 @@ static int muzix_handle_wait(muzix_userspace_syscall_context_t *ctx,
     caller_pid = table->slots[slot].pid;
 
     for (;;) {
+        /*
+         * Atomic scan-and-park: disable interrupts so a child exit
+         * cannot land between finding no zombie and parking the
+         * parent.  If a child exits while interrupts are off, its
+         * exit path sets exited=1 and tries to wake the parent; the
+         * wake misses because the parent is not yet parked, but when
+         * interrupts come back on and the parent parks, the next
+         * wake_expired() or wake_input() finds the slot parked and
+         * readies it, and the rescan below finds the zombie.
+         */
+#if defined(__SDCC) && defined(__SDCC_z80)
+        __asm di __endasm;
+#endif
+
         for (i = 0; i < MUZIX_PROC_TABLE_MAX; i++) {
             if (table->slots[i].exited &&
                 table->slots[i].parent_pid == caller_pid) {
@@ -845,6 +879,10 @@ static int muzix_handle_wait(muzix_userspace_syscall_context_t *ctx,
                  * and another fork can take it. */
                 table->slots[i].exited = 0;
                 table->slots[i].exit_status = 0;
+
+#if defined(__SDCC) && defined(__SDCC_z80)
+        __asm ei __endasm;
+#endif
 
                 if (status_ptr != 0) {
                     int32_t status_word = child_status;
@@ -858,33 +896,13 @@ static int muzix_handle_wait(muzix_userspace_syscall_context_t *ctx,
             }
         }
 
-        /* No zombie yet: wait for one.  The park is the sentinel "no
-         * deadline", so only a child's EXIT ends it - the scheduler will not
-         * hand this slot back on a clock tick.
-         *
-         * AND THIS HANDLER RETURNS AFTER THE SWITCHOUT.  IT DOES NOT LOOP.
-         *
-         * muzix_kernel_switchout() does not perform the switch: it publishes
-         * the next slot's resume point (context_switch_to fills the window-0
-         * cells and muzix_resume_banks) and RETURNS TO HERE, leaving the jump
-         * to the trap, which sees muzix_switch_pending and follows
-         * muzix_zeta_resume_from.  A handler that keeps going after the
-         * switchout - which this one did, re-scanning and re-parking in a
-         * loop - overwrites the published resume with the next one and never
-         * lets the trap jump: the target it published is dispatched and then
-         * un-published.  Measured with the loop in place: muzix_context_
-         * switch_to was called with the forked child's slot (DE=0005) and the
-         * child never executed a single instruction afterwards - not one
-         * syscall, not the fork-return test - because the waiting handler's
-         * next iteration published somebody else.
-         *
-         * So this returns 0, the shell's wait() sees 0, and the zombie is
-         * reaped by the next wait: a child that exits later is found by the
-         * scan the same way, and a shell that calls wait in a loop converges.
-         * The alternative - resuming inside this handler - would need the
-         * park to hand back control after the wake, which is the trap's jump
-         * the loop was fighting. */
+        /* No zombie yet: park with the infinite sentinel.  Only a
+         * child's EXIT ends it - the scheduler will not hand this
+         * slot back on a clock tick. */
         muzix_proc_table_park(table, muzix_current_slot(ctx), 0xFFFF);
+#if defined(__SDCC) && defined(__SDCC_z80)
+        __asm ei __endasm;
+#endif
         muzix_kernel_switchout(ctx->kernel->loop);
         return 0;
     }
@@ -948,9 +966,19 @@ static int muzix_handle_fork(muzix_userspace_syscall_context_t *ctx)
     pc = muzix_resume_pc;
     sp = muzix_resume_sp;
     stack_len = muzix_fork_stack_len;
-
     if (muzix_proc_table_fork(table, parent_slot, child_slot, child_pid) != 0) {
         return -1;
+    }
+
+    /* Inherit command name so tools like top can identify the process */
+    if (parent->name[0] != '\0') {
+        int ni;
+        for (ni = 0; ni < 15 && parent->name[ni] != '\0'; ni++) {
+            table->slots[child_slot].name[ni] = parent->name[ni];
+        }
+        table->slots[child_slot].name[ni] = '\0';
+    } else {
+        table->slots[child_slot].name[0] = '\0';
     }
 
     /* The shared image: the child runs the parent's text and data until it
@@ -1117,41 +1145,55 @@ static int32_t muzix_handle_exec(muzix_userspace_syscall_context_t *ctx,
     muzix_exec_path_buf[MUZIX_EXEC_PATH_MAX - 1] = '\0';
 
     /* argv: walk the caller's pointer array one word at a time - again so the
-     * read stops at the NULL instead of past the array - and copy each string
-     * into a kernel pool.  muzix_exec_copy_argv() later dereferences these
-     * from kernel context while writing the block onto the new stack, so the
-     * strings have to be here, not at their user addresses. */
-    muzix_exec_argv_kernel[0] = NULL;
-    if (arg2 != 0) {
-        for (i = 0; i < MUZIX_EXEC_ARGV_MAX; i++) {
-            uint16_t str_ptr = 0;
-            int j;
+     * read stops at the NULL instead of past the array - and pack each string,
+     * NUL included, contiguously into the 512-byte argv arena.  The loader
+     * dereferences these pointers from kernel context while writing the
+     * argument block onto the new stack, so the strings have to be here, not
+     * at their user addresses.  The 512-byte limit is an intentional reduction
+     * from the previous 1024-byte aggregate storage capacity
+     * (muzix_exec_arg_pool[16][64]). */
+    {
+        uint16_t arena_off = 0;
 
-            if (muzix_copy_user_from_current(ctx,
-                                             (uint16_t)arg2 + (uint16_t)(i * 2),
-                                             (uint8_t *)&str_ptr, 2) != 0) {
-                break;
-            }
-            if (str_ptr == 0) {
-                break;
-            }
-            for (j = 0; j < MUZIX_EXEC_ARG_MAX - 1; j++) {
+        muzix_exec_argv_kernel[0] = NULL;
+        if (arg2 != 0) {
+            for (i = 0; i < MUZIX_EXEC_ARGV_MAX; i++) {
+                uint16_t str_ptr = 0;
+                uint16_t arg_start;
+                int j;
+
                 if (muzix_copy_user_from_current(ctx,
-                                                 (uint16_t)(str_ptr + (uint16_t)j),
-                                                 (uint8_t *)&muzix_exec_arg_pool[i][j],
-                                                 1) != 0) {
-                    return -1;
-                }
-                if (muzix_exec_arg_pool[i][j] == '\0') {
+                                                 (uint16_t)arg2 + (uint16_t)(i * 2),
+                                                 (uint8_t *)&str_ptr, 2) != 0) {
                     break;
                 }
+                if (str_ptr == 0) {
+                    break;
+                }
+
+                arg_start = arena_off;
+                for (j = 0; ; j++) {
+                    uint8_t ch;
+
+                    if (arena_off >= MUZIX_EXEC_ARENA_SIZE) {
+                        return -1;
+                    }
+                    if (muzix_copy_user_from_current(ctx,
+                                                     (uint16_t)(str_ptr + (uint16_t)j),
+                                                     (uint8_t *)&ch, 1) != 0) {
+                        return -1;
+                    }
+                    muzix_exec_arg_arena[arena_off++] = ch;
+                    if (ch == '\0') {
+                        break;
+                    }
+                }
+                muzix_exec_argv_kernel[i] = &muzix_exec_arg_arena[arg_start];
+                argc++;
             }
-            muzix_exec_arg_pool[i][MUZIX_EXEC_ARG_MAX - 1] = '\0';
-            muzix_exec_argv_kernel[i] = muzix_exec_arg_pool[i];
-            argc++;
         }
+        muzix_exec_argv_kernel[argc] = NULL;
     }
-    muzix_exec_argv_kernel[argc] = NULL;
 
 
     /* The rest of the loader's argument block.  The MM service and the process
@@ -1202,7 +1244,7 @@ static int32_t muzix_handle_ipc_sendrec(
 
     table = &ctx->kernel->loop->system.startup.proc_table;
     current_slot = muzix_current_slot(ctx);
-
+    
     if (current_slot < 0) {
         return -1;
     }
@@ -1215,6 +1257,12 @@ static int32_t muzix_handle_ipc_sendrec(
      * in the destination's callerq and mini_rec() walks that queue, so a
      * message could be queued against a slot that then never ran. */
     ipc_slot = current_slot;
+
+    muzix_trace_write("sendrec:");
+    muzix_trace_hex8((uint8_t)ipc_slot);
+    muzix_trace_write("->");
+    muzix_trace_hex8((uint8_t)dest_slot);
+    muzix_trace_write("\r\n");
 
     /* Copy message from userspace to kernel */
     if (muzix_copy_user_from_current(ctx, (uint16_t)user_msg, (uint8_t *)&msg, sizeof(msg)) != 0) {
@@ -1309,25 +1357,45 @@ static int32_t muzix_handle_ipc_sendrec(
         /* Send via IPC - dest_slot is already an IPC slot from userspace */
         if (current_slot >= 0 && current_slot < MUZIX_PROC_TABLE_MAX) {
             g_route_msg[current_slot] = msg;
-            result = muzix_ipc_sendrec(&g_ipc, ipc_slot, dest_slot, &g_route_msg[current_slot]);
+            g_route_msg[current_slot].m_source = (int16_t)ipc_slot;
+            result = muzix_ipc_send(&g_ipc, ipc_slot, dest_slot,
+                                    &g_route_msg[current_slot]);
         } else {
             result = -1;
         }
+
         if (result >= 10) {
-            /* A process was woken - ready it in the kernel proc_table */
             int woken_slot = result - 10;
+            muzix_trace_write("sendrec send woke:");
+            muzix_trace_hex8((uint8_t)woken_slot);
+            muzix_trace_write("\r\n");
             if (woken_slot >= 0 && woken_slot < MUZIX_PROC_TABLE_MAX) {
-                /*
-                 * The message this call sent is now the woken process's
-                 * business.  Put it where that process will actually look for
-                 * it, while this stack is still live enough to do the copy -
-                 * the parked frame cannot, and resume_ret is set to the
-                 * message's own value so its sendrec() answers with it.
-                 */
                 muzix_syscalls_deliver_parked(ctx, woken_slot);
                 muzix_proc_table_ready(table, woken_slot);
             }
             result = 0;
+        }
+
+        if (result < 0) {
+            muzix_trace_write("sendrec send fail\r\n");
+            return -1;
+        }
+
+        muzix_syscalls_note_recv_buffer(ipc_slot, (uint16_t)user_msg);
+        result = muzix_ipc_receive(&g_ipc, ipc_slot, dest_slot, &msg);
+
+        muzix_trace_write("sendrec recv result=");
+        muzix_trace_hex8((uint8_t)(result & 0xff));
+        muzix_trace_write("\r\n");
+
+        if (result == 1) {
+            muzix_trace_write("sendrec park\r\n");
+            if (current_slot >= 0 && current_slot < MUZIX_PROC_TABLE_MAX) {
+                muzix_proc_table_charge(&table->slots[current_slot], 1);
+            }
+            muzix_proc_table_park(table, muzix_current_slot(ctx), 0xFFFF);
+            muzix_kernel_switchout(ctx->kernel->loop);
+            return 0;
         }
     }
     if (result != 0) {
@@ -1372,7 +1440,13 @@ static int32_t muzix_handle_ipc_sendrec(
     }
 
     /* Copy result back to userspace */
+    muzix_trace_write("sendrec copy-back m1_i1=");
+    muzix_trace_hex8((uint8_t)(msg.m1_i1 & 0xff));
+    muzix_trace_write(" m_source=");
+    muzix_trace_hex8((uint8_t)(msg.m_source & 0xff));
+    muzix_trace_write("\r\n");
     if (muzix_copy_user_to_current(ctx, (uint16_t)user_msg, (const uint8_t *)&msg, sizeof(msg)) != 0) {
+        muzix_trace_write("sendrec copy-back fail\r\n");
         return -1;
     }
 
@@ -1651,38 +1725,6 @@ static int32_t muzix_handle_seek(muzix_userspace_syscall_context_t *ctx,
     return muzix_rom_seek((int)fd, (uint32_t)offset, (int)whence);
 }
 
-static int32_t muzix_handle_getcwd(muzix_userspace_syscall_context_t *ctx,
-                                   int32_t buf_arg,
-                                   int32_t size)
-{
-    /* The ROM filesystem has exactly one directory and it is "/", so the
-     * answer is a constant.  It is answered HERE because the routed path is
-     * the one place the shell's prompt can hang: the FS server's
-     * handle_getcwd() is a stub, and measured on 2026-10-15 the shell parked
-     * in the getcwd of its prompt refresh after every command and did not
-     * come back until the NEXT keystroke woke it - the prompt after a command
-     * was missing, which reads as "ls does not return to the shell".  A
-     * constant answer costs one string copy and takes the round trip out of
-     * the prompt loop entirely.
-     *
-     * The return is the caller's own buffer address, which is what
-     * lib/syscall.c's sys_getcwd() treats as success (`ret < 0` is the only
-     * failure it looks for). */
-    static const char root_cwd[] = "/";
-    /* The same sign extension: see muzix_handle_open(). */
-    uint16_t buf_addr = (uint16_t)buf_arg;
-
-    if (buf_addr == 0 || size < 2) {
-        return -1;
-    }
-    if (muzix_copy_to_proc(ctx, (uint8_t)muzix_current_slot(ctx),
-                           buf_addr, (const uint8_t *)root_cwd,
-                           (uint16_t)(sizeof(root_cwd))) != 0) {
-        return -1;
-    }
-    return (int32_t)buf_addr;
-}
-
 static int32_t muzix_handle_userspace_syscall_ipc(
     muzix_userspace_syscall_context_t *ctx,
     int32_t syscall_num,
@@ -1832,6 +1874,45 @@ static int32_t muzix_handle_userspace_syscall_ipc(
         return muzix_handle_rtc(ctx, syscall_num, arg1, arg2);
     }
 
+    if (syscall_num == MUZIX_USER_SYS_GETTICKS) {
+        /* Return current tick count (120 Hz) in DE (high:low). */
+        return (int32_t)muzix_tick_now();
+    }
+
+    if (syscall_num == MUZIX_USER_SYS_SOCKET ||
+        syscall_num == MUZIX_USER_SYS_NETCTL ||
+        syscall_num == MUZIX_USER_SYS_NETSTAT ||
+        syscall_num == MUZIX_USER_SYS_NETINFO) {
+        if (muzix_w5100_ensure_init() != 0) {
+            return -1;
+        }
+        int slot = muzix_current_slot(ctx);
+        if (slot < 0) {
+            return -1;
+        }
+        muzix_proc_slot_t *proc = muzix_current_process(ctx);
+        uint8_t generation = proc ? (uint8_t)proc->pid : 0;
+
+        int sock = (syscall_num == MUZIX_USER_SYS_SOCKET) ? 0 : (arg1 >> 8) & 0xFF;
+        if (syscall_num == MUZIX_USER_SYS_SOCKET) {
+            /* Allocate via the socket manager - sole authority over W5100
+             * socket lifetime, reference counting and permissions.  Returns
+             * the physical socket number (0-3) or a negative error. */
+            return muzix_socket_manager_allocate(&g_muzix_socket_manager,
+                                                 slot, generation, W5100_PROTO_TCP);
+        }
+        if (syscall_num == MUZIX_USER_SYS_NETCTL) {
+            int op = arg1 & 0xFF;
+            return muzix_handle_netctl(ctx, sock, op, (uint16_t)arg2,
+                                       (uint16_t)arg3);
+        }
+        if (syscall_num == MUZIX_USER_SYS_NETSTAT) {
+            return muzix_handle_netstat(ctx, sock, (int)arg2,
+                                        (uint16_t)arg3);
+        }
+        return muzix_handle_netinfo(ctx, (uint16_t)arg2);
+    }
+
     if (syscall_num == MUZIX_USER_SYS_FORK) {
 
         /* Fork is the kernel's own work and used to be routed to the PM, whose
@@ -1856,6 +1937,11 @@ static int32_t muzix_handle_userspace_syscall_ipc(
         return muzix_handle_load(ctx, arg1);
     }
 
+    if (syscall_num == MUZIX_USER_SYS_CPU_MHZ_X10) {
+        /* Return calibrated CPU frequency in MHz x10. */
+        return (int32_t)muzix_tick_get_cpu_mhz_x10();
+    }
+
     if (syscall_num == MUZIX_USER_SYS_GETUID ||
         syscall_num == MUZIX_USER_SYS_GETGID ||
         syscall_num == MUZIX_USER_SYS_SETUID ||
@@ -1870,6 +1956,11 @@ static int32_t muzix_handle_userspace_syscall_ipc(
         /* arg1 = the target pid, arg2 = the signal 1..16.  See
          * muzix_handle_signal() above. */
         return muzix_handle_signal(ctx, arg1, arg2);
+    }
+
+    if (syscall_num == MUZIX_USER_SYS_CHECK_SIGNAL) {
+        /* arg1-arg3 unused.  See muzix_handle_check_signal() above. */
+        return muzix_handle_check_signal(ctx);
     }
 
     /* SYS_ROM_READ: block arg1, buffer arg2 */
@@ -2138,6 +2229,27 @@ int32_t muzix_handle_userspace_syscall(
     
     muzix_proc_set_accounted(process);
     muzix_proc_table_charge(process, 0);
+
+    /* Deliver pending signals at syscall entry - the first safe point where
+     * the kernel has full control of the current process.  If the signal
+     * kills the process, switch out and never return to userspace for it.
+     * SIGKILL (9) always results in termination; other signals are delivered
+     * the same way (no userspace signal handlers exist in Muzix). */
+    if (process && ctx->kernel && ctx->kernel->loop) {
+        muzix_kernel_proc_table_t *t =
+            &ctx->kernel->loop->system.startup.proc_table;
+        int slot = muzix_current_slot(ctx);
+        if (slot >= 0 && slot < MUZIX_PROC_TABLE_MAX &&
+            t->slots[slot].pending_signals != 0u) {
+            muzix_proc_table_deliver_pending(
+                t, slot, ctx->kernel->loop->mm);
+            if (!t->slots[slot].active) {
+                /* Process was killed: never return to userspace for it. */
+                muzix_kernel_switchout(ctx->kernel->loop);
+                /* Not reached. */
+            }
+        }
+    }
     
     
     if (syscall_num == MUZIX_USER_SYS_PARK) {
@@ -2148,8 +2260,22 @@ int32_t muzix_handle_userspace_syscall(
         }
         t = &ctx->kernel->loop->system.startup.proc_table;
         if (arg1 <= 0) {
+            /* Clamp zero (and negatives) to one tick: a deadline of `now`
+             * would be reported as reached at once, so the smallest finite
+             * wait is one tick.  sys_park(0) therefore waits one tick. */
             arg1 = 1;
+        } else if (arg1 > 32767 && arg1 < 65535) {
+            /* 32768-65534 ticks: muzix_tick_expired() is only valid for
+             * forward deadlines up to 32767 ticks (the half-range rule), so
+             * a modular `now + ticks` deadline here would wake at the wrong
+             * time.  Reject the request rather than silently scheduling an
+             * invalid deadline.  -1 is the error indication this dispatcher
+             * already returns for a bad context; no new error convention. */
+            return -1;
         }
+        /* arg1 == 65535 passes through: muzix_proc_table_park() treats
+         * 0xFFFF as an infinite wait (tick_deadline_valid == 0).
+         * arg1 in 1-32767 is a finite timeout. */
         muzix_proc_table_charge(process, 1);
         muzix_proc_table_park(t, muzix_current_slot(ctx), (uint16_t)arg1);
         

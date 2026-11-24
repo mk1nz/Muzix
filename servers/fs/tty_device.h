@@ -1,8 +1,7 @@
 #ifndef MUZIX_TTY_DEVICE_H
 #define MUZIX_TTY_DEVICE_H
 
-#include <stdint.h>
-#include <stddef.h>
+#include "ztypes.h"
 
 #include "../lib/tty_ioctl.h"
 

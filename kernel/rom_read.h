@@ -1,7 +1,7 @@
 #ifndef MUZIX_ROM_READ_H
 #define MUZIX_ROM_READ_H
 
-#include <stdint.h>
+#include "ztypes.h"
 #include "../fs/block_device.h"
 
 /* Forward declaration of MM service struct (defined in mm/mm_service.h) */

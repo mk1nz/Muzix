@@ -1,7 +1,7 @@
 #ifndef MUZIX_FS_PATH_H
 #define MUZIX_FS_PATH_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 typedef int (*muzix_fs_path_component_lookup_fn)(void *context,
                                                  uint16_t directory_inode,

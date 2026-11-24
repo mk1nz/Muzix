@@ -1,38 +1,92 @@
 #ifndef MUZIX_LIBC_H
 #define MUZIX_LIBC_H
 
-#include <stdint.h>
-#include <stddef.h>
+#include "ztypes.h"
 
 #include "proc_info.h"
 #include "tty_ioctl.h"
 
 /* Standard types */
-typedef int pid_t;      /* Process ID */
-typedef int fd_t;       /* File descriptor */
-typedef int mode_t;     /* File mode */
-typedef int ssize_t;    /* Signed size */
+typedef int     pid_t;     /* Process ID */
+typedef int     fd_t;      /* File descriptor */
+typedef int     mode_t;    /* File mode */
+typedef int     ssize_t;   /* Signed size */
+typedef struct FILE FILE;  /* Host stream type (incomplete declaration) */
 
+/* Assert macro for host tests (no-op when disabled) */
+#ifndef NDEBUG
+#define assert(cond) ((cond) ? (void)0 : (__assert_fail(#cond, __FILE__, __LINE__), (void)0))
+#else
+#define assert(cond) ((void)0)
+#endif
+void __assert_fail(const char *expr, const char *file, int line);
+
+/* ---- Host-only declarations (not available to Z80 code) ---- */
+#ifndef __SDCC_z80
+
+/* String to number conversion */
+unsigned long strtoul(const char *nptr, char **endptr, int base);
+
+/* Host stream I/O (used by host tests only) */
+FILE *fopen(const char *path, const char *mode);
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
+int fclose(FILE *stream);
+int fseek(FILE *stream, long offset, int whence);
+long ftell(FILE *stream);
+int fflush(FILE *stream);
+int snprintf(char *str, size_t size, const char *format, ...);
+int vfprintf(FILE *stream, const char *format, va_list ap);
+int fprintf(FILE *stream, const char *format, ...);
+int vprintf(const char *format, va_list ap);
+
+/* Standard environment */
+char *getenv(const char *name);
+
+#endif /* __SDCC_z80 */
+
+/* Standard output stream */
+extern FILE *stdout;
+
+/* Seek whence values */
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
+/* Directory entry returned by readdir(). */
 struct dirent {
-	uint16_t inode;
-	char name[15];
+    uint16_t inode;
+    char     name[15];
 };
 
 /* stat structure - matches kernel's muzix_fs_inode_t */
 struct stat {
-    uint16_t st_mode;
-    uint16_t st_uid;
-    uint32_t st_size;
-    uint16_t st_gid;
-    uint8_t  st_links;
-    uint16_t st_zone[7];
-    uint16_t st_indirect_zone;
-    uint8_t  st_used;
-    uint8_t  st_pad[3];
+	uint16_t st_mode;
+	uint16_t st_uid;
+	uint32_t st_size;
+	uint16_t st_gid;
+	uint8_t  st_links;
+	uint16_t st_zone[7];
+	uint16_t st_indirect_zone;
+	uint8_t  st_used;
+	uint8_t  st_pad[3];
 };
 
-/*
- * Calendar time, as read from and written to the on-board DS1302.
+/* The century the chip's two-digit year is read in.
+ *
+ * A DS1302 has a two-digit year register and nowhere to put a century, so a
+ * bare 26 could be 1926 or 2026 and the chip cannot say.  Nothing in the
+ * system can say either: there is no other clock.  The century is therefore a
+ * stated assumption rather than a derived fact, and 2000 is the one to state:
+ * it is the century the hardware this runs on is in, it makes `date` round-trip
+ * what it just set, and it is one #define away from being changed on a board
+ * that should read the other one.
+ *
+ * The consequence is that the window is 2000-2099 and that time()'s seconds
+ * are offset by this many years from a true 1970 epoch.  The offset is imposed
+ * by the hardware, not chosen. */
+#define MUZIX_RTC_YEAR_BASE 2000
+
+/* Calendar time, as read from and written to the on-board DS1302.
  *
  * Binary, not BCD: the chip keeps BCD in its registers and the driver converts
  * once, on the way in and out, so nothing above the driver has to know.
@@ -42,26 +96,7 @@ struct stat {
  *
  * weekday is 1-7 with Sunday = 1, which is how the chip counts it.  It is
  * carried here so that `date` can set the chip's day-of-week register; a caller
- * that does not know it passes 0 and the register is left alone.
- */
-/*
- * The century the chip's two-digit year is read in.
- *
- * A DS1302 has a two-digit year register and nowhere to put a century, so a
- * bare 26 could be 1926 or 2026 and the chip cannot say.  Nothing in the
- * system can say either: there is no other clock, and the kernel's `tick` is a
- * scheduler-pass counter rather than a time of day.  The century is therefore a
- * stated assumption rather than a derived fact, and 2000 is the one to state:
- * it is the century the hardware this runs on is in, it makes `date` round-trip
- * what it just set, and it is one #define away from being changed on a board
- * that should read the other one.
- *
- * The consequence is that the window is 2000-2099 and that time()'s seconds
- * are offset by this many years from a true 1970 epoch.  The offset is imposed
- * by the hardware, not chosen.
- */
-#define MUZIX_RTC_YEAR_BASE 2000
-
+ * that does not know it passes 0 and the register is left alone. */
 struct rtc_time {
 	uint8_t second;   /* 0-59  */
 	uint8_t minute;   /* 0-59  */
@@ -87,6 +122,7 @@ void printf(const char *fmt, ...);
 char *strcpy(char *dest, const char *src);
 char *strncpy(char *dest, const char *src, size_t n);
 char *strrchr(const char *s, int c);
+char *strstr(const char *haystack, const char *needle);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);
 size_t strlen(const char *s);
@@ -116,6 +152,7 @@ void exit(int status);
 int wait(int *status);
 int getpid(void);
 int getppid(void);
+void sleep(uint16_t seconds);  /* Sleep for approx seconds */
 
 /* One slot of the process table, as a struct proc_info.
  *
@@ -166,15 +203,13 @@ int stat(const char *pathname, void *statbuf);
 void sync(void);
 int system(const char *command);
 
-/*
- * Time.
+/* Time.
  *
  * These go to the DS1302 on port $70, not to a counter.  time() used to return
  * the kernel's scheduler-pass counter, which does not advance while a process
  * is running: a program that read it twice in a row got the same number both
  * times no matter how long it had been running, and a program that slept saw
- * it move.  A clock that stops when you ask it a question is not a clock.
- */
+ * it move.  A clock that stops when you ask it a question is not a clock. */
 int time(int32_t *seconds);
 int get_rtc(struct rtc_time *time);
 
@@ -196,8 +231,7 @@ int get_rtc(struct rtc_time *time);
  * its own. */
 int set_rtc(struct rtc_time *time);
 
-/*
- * Seconds since the first exec after power-on: the clock now minus the clock as
+/* Seconds since the first exec after power-on: the clock now minus the clock as
  * it read at boot, the second of which the kernel took once and kept.
  *
  * The DS1302 supplies calendar time; the project converts its reading to
@@ -215,30 +249,26 @@ int set_rtc(struct rtc_time *time);
  *
  * `boot` receives the baseline the answer was computed from, which the call has
  * read anyway; pass NULL for the interval alone.  Handing it back is what lets a
- * program print the figure and the reading behind it as one observation.
- */
+ * program print the figure and the reading behind it as one observation. */
 int uptime(int32_t *seconds, struct rtc_time *boot);
 
-/*
- * Is there unconsumed input on the console?  1 if there is, 0 if there is not,
+/* Is there unconsumed input on the console?  1 if there is, 0 if there is not,
  * -1 if the request could not be made.
  *
- * This is the one call in the system that answers "has anybody typed
- * anything" without wanting a whole line first. `top` uses it to stop after a
- * keypress without consuming that byte. The system has timer and UART
- * interrupts, but the scheduler is cooperative: neither interrupt preempts a
- * running userspace program, and read() waits for a complete canonical line.
+ * This is the one call in the system that answers "has anybody typed anything"
+ * without wanting a whole line first. `top` uses it to stop after a keypress
+ * without consuming that byte. The system has timer and UART interrupts, but
+ * the scheduler is cooperative: neither interrupt preempts a running userspace
+ * program, and read() waits for a complete canonical line.
  *
  * It does not block and it does not consume.  Asking is free, and the byte that
- * made the answer non-zero is still there afterwards, so a program can ask
- * every refresh and the shell that gets the console back will still read the
- * keypress that stopped it.  The user does see that keypress echoed, at the
- * next prompt, which is the one visible consequence - see the note in
- * apps/top.c.
+ * made the answer non-zero is still there afterwards, so a program can ask every
+ * refresh and the shell that gets the console back will still read the keypress
+ * that stopped it.  The user does see that keypress echoed, at the next prompt,
+ * which is the one visible consequence - see the note in apps/top.c.
  *
  * A negative answer is not a reason to stop. A program polling this should
- * treat -1 as "nothing known" and carry on, rather than as a keypress.
- */
+ * treat -1 as "nothing known" and carry on, rather than as a keypress. */
 int tty_input_pending(void);
 
 #endif /* MUZIX_LIBC_H */

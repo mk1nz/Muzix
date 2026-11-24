@@ -1,7 +1,7 @@
 #ifndef MUZIX_SYSTEM_ENTRY_H
 #define MUZIX_SYSTEM_ENTRY_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "startup.h"
 

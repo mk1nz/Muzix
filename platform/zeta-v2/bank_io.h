@@ -1,7 +1,7 @@
 #ifndef MUZIX_ZETA_BANK_IO_H
 #define MUZIX_ZETA_BANK_IO_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #define MUZIX_ZETA_BANK_PORT_0 0x78u
 #define MUZIX_ZETA_BANK_PORT_1 0x79u

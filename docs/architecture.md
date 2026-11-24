@@ -53,6 +53,23 @@ distinct values.
 
 `exec_loader.c` allocates pages through MM, builds the process map, loads the
 program into its text page, and installs its linker-derived entry point.
+
+**Argv layout on the process stack (window 1, below 0x8000):**
+
+User memory layout constants:
+- `MUZIX_EXEC_STACK_TOP = 0x7FFF` (top of window 1)
+- `MUZIX_EXEC_SP_ADDR = 0x7FEC` (where SP is published to crt0)
+- `MUZIX_EXEC_ARGV_ADDR = 0x7FEE` (where argv pointer array address is published)
+- `MUZIX_EXEC_ARGC_ADDR = 0x7FF0` (where argc is published)
+
+Layout (lowest to highest):
+1. **Stack** (grows down from `stack_base - 16` where `stack_base = SP_ADDR - argc*2 - 256` minus string lengths)
+2. **String data** (argv strings, written downward from `stack_base`)
+3. **argv pointer array** (`argv_array_addr = SP_ADDR - argc*2`, each entry is 2 bytes pointing to a string)
+4. **Control words** (0x7FEC=SP, 0x7FEE=argv ptr, 0x7FF0=argc — read by crt0.s)
+
+The argv array and strings are placed **below** the control word region (0x7FEC-0x7FF1) to prevent overlap: the array is derived from `MUZIX_EXEC_SP_ADDR`, not `MUZIX_EXEC_STACK_TOP`. Earlier code derived it from `stack_top` (0x7FFF), which for argc >= 7 caused the argv array to collide with the control words, corrupting argc/argv/sp or the argument strings themselves.
+
 **Before the FS server is running**, exec_loader uses direct ROM reads (via
 `rom_read_block` → `mm_service` → `zeta_copy_rom_page_to_kernel`). **After
 FS server starts**, exec_loader switches to IPC-based filesystem access.
@@ -68,6 +85,25 @@ process-time accounting but does not preempt a running userspace process.
 `uptime()` compares the current RTC reading with the reading saved at boot.
 Process accounting values are tick counts, not seconds or CPU-utilization
 percentages.
+
+## I2C Bus Recovery
+
+The kernel performs I2C bus recovery in `kernel_loop.c` during idle halt. The function
+`muzix_i2c_bus_check()` directly accesses the КР580ВВ55А PPI ports (0x60-0x63) — it does
+not depend on `lib/i2c.c`:
+
+1. **Check before halt**: catches lockups from interrupted transfers during the last execution slice.
+2. **Check after halt**: catches lockups that occurred during an interrupt handler (CTC tick or UART interrupt) that led to the halt. This is unique to systems with bit-bang I2C and cooperative scheduling.
+
+**Recovery procedure** (following the Linux `i2c_generic_scl_recovery()` pattern):
+1. Release both SDA and SCL (set to OUTPUT, write 1 to both lines on PC0/PC4).
+2. Check SCL is high first — if stuck low, abort (matches Linux `-EBUSY`).
+3. If SDA is stuck low: perform 9 SCL clock pulses (PC4), checking SDA after each pulse.
+   A slave stuck mid-byte will complete its transmission and release SDA when clocked.
+4. Progressive retry with longer delays (50μs, 100μs, 200μs) if still stuck after initial recovery.
+
+Userspace I2C code in `lib/i2c.c` has its own `i2c_bus_check()` with the same recovery logic
+for use by non-kernel code (e.g., `apps/i2ctest.c`, `lib/lcd.c`).
 
 ## Filesystem and Limits
 

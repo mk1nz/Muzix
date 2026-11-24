@@ -27,8 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include "ztypes.h"
 #include <time.h>
 
 #include "emulator.h"
@@ -221,8 +220,8 @@ static ds1302_state_t ds1302;
  * DS1302 Initialization
  * ============================================================================ */
 
-void ds1302_init(void)
-{
+void
+ds1302_init(void) {
     memset(&ds1302, 0, sizeof(ds1302));
     
     /* Initialize latch to idle state */
@@ -253,8 +252,8 @@ void ds1302_init(void)
     ds1302.trickle = 0xA5;
 }
 
-void ds1302_reset(void)
-{
+void
+ds1302_reset(void) {
     memset(&ds1302, 0, sizeof(ds1302));
     
     /* Initialize latch to idle state */
@@ -328,8 +327,8 @@ static uint8_t ds1302_clock_reg_id(uint8_t index, bool is_write)
     return (uint8_t)(REG_SEC + (uint8_t)(index * 2u) + (is_write ? 1u : 0u));
 }
 
-static void ds1302_decode_cmd(uint8_t cmd, ds1302_command_t *out)
-{
+static void
+ds1302_decode_cmd(uint8_t cmd, ds1302_command_t *out) {
     out->is_write = (cmd & CMD_READ) == 0;
     out->is_ram = (cmd & CMD_RAM) != 0;
     out->burst = (cmd & 0x20u) != 0;
@@ -893,8 +892,8 @@ static int bcd_inc_hour(uint8_t* field)
     return 0;
 }
 
-void ds1302_advance_one_second(void)
-{
+void
+ds1302_advance_one_second(void) {
     /* A real DS1302 does not count while bit 7 of the seconds register is
      * set, so neither does this. */
     if ((ds1302.seconds & CH_MASK) != 0) {
@@ -925,8 +924,8 @@ void ds1302_advance_one_second(void)
     }
 }
 
-void ds1302_get_time_bcd(uint8_t* buf)
-{
+void
+ds1302_get_time_bcd(uint8_t* buf) {
     buf[0] = ds1302.seconds;  /* Seconds */
     buf[1] = ds1302.minutes;  /* Minutes */
     buf[2] = ds1302.hours;    /* Hours */
@@ -966,8 +965,8 @@ void ds1302_set_time_bcd_raw(uint8_t* buf)
     ds1302.hours = buf[2];
 }
 
-void ds1302_set_write_protect(uint8_t reg)
-{
+void
+ds1302_set_write_protect(uint8_t reg) {
     ds1302.wp = reg & WP_MASK;
 }
 

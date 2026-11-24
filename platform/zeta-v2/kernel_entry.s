@@ -176,19 +176,33 @@ _muzix_zeta_enter_userspace:
 
     ; Bank 0 is always kernel page 0x20
     ld a, #0x20
-    out (0x78), a
-    
-    ; Bank 1 = pages[1] (was in B)
-    ld a, b
-    out (0x79), a
-    
-    ; Bank 2 = pages[2] (was in C)
-    ld a, c
-    out (0x7A), a
-    
+    ld h, b           ; H = pages[1] (save before port addressing clobbers B,C)
+    ld l, c           ; L = pages[2]
+    ld c, #0x78
+    ld b, #0
+    out (c), a        ; bank 0 = 0x20
+
+    ; Bank 1 = pages[1] (restored from H)
+    ld a, h
+    ld c, #0x79
+    ld b, #0
+    out (c), a        ; bank 1 = pages[1]
+
+    ; Bank 2 = pages[2] (restored from L)
+    ld a, l
+    ld c, #0x7A
+    ld b, #0
+    out (c), a        ; bank 2 = pages[2]
+
     ; Bank 3 = pages[3] (now in D)
     ld      a, d
-    out     (0x7B), a
+    ld      c, #0x7B
+    ld      b, #0
+    out     (c), a    ; bank 3 = pages[3]
+
+    ; Restore B and C for the window-0 mirror write below
+    ld b, h           ; B = pages[1]
+    ld c, l           ; C = pages[2]
 
     ; Publish the same four pages into the window-0 mirror.
     ;

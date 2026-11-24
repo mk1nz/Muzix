@@ -12,8 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include "ztypes.h"
 #include <ctype.h>
 
 #include "z80pack.h"

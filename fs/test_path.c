@@ -17,8 +17,8 @@ static int lookup_component(void *context, uint16_t directory_inode,
     return -1;
 }
 
-static int test_path(void)
-{
+static int
+test_path(void) {
     uint16_t inode;
 
     muzix_fs_directory_init(&root);
@@ -36,7 +36,7 @@ static int test_path(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_path();
 }

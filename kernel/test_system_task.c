@@ -5,8 +5,8 @@
 #include "kernel_loop.h"
 #include "syscalls.h"
 
-static int test_system_task(void)
-{
+static int
+test_system_task(void) {
     muzix_kernel_loop_t loop;
     muzix_system_task_t task;
     process_map_t kernel_map = {{7, 7, 7, 7}};
@@ -53,7 +53,7 @@ static int test_system_task(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_system_task();
 }

@@ -53,8 +53,8 @@ const process_map_t g_kernel_map = {
 static zeta_saved_context_t g_context_stack[ZETA_CONTEXT_DEPTH_MAX];
 static uint8_t g_context_depth;
 
-void zeta_context_stack_init(void)
-{
+void
+zeta_context_stack_init(void) {
     /* Idempotent and safe to call at any time, including with temp-map
      * operations still in flight.  A slot leaked by a callback that entered a
      * process and never came back is reclaimed here rather than wedging every
@@ -113,8 +113,8 @@ static void write_all_banks(zeta_state_t *state, const uint8_t pages[4])
     muzix_live_banks[3] = p3;
 }
 
-static void load_map(zeta_state_t *state, const process_map_t *map)
-{
+static void
+load_map(zeta_state_t *state, const process_map_t *map) {
     write_all_banks(state, map->pages);
 }
 
@@ -139,15 +139,13 @@ static void trace_map_refused(void)
  * so. */
 int zeta_load_map(zeta_state_t *state, const process_map_t *map)
 {
-    if (!state || !map) {
-        return -1;
-    }
+    if (!state || !map) return -1;
     load_map(state, map);
     return 0;
 }
 
-static void save_map(zeta_state_t *state, zeta_saved_context_t *saved)
-{
+static void
+save_map(zeta_state_t *state, zeta_saved_context_t *saved) {
     (void)state;
     saved->pages[0] = muzix_live_banks[0];
     saved->pages[1] = muzix_live_banks[1];
@@ -256,18 +254,12 @@ static int map_call_impl(zeta_state_t *state,
     uint8_t slot;
     int result;
 
-    if (!state || !target_map || cb == ZETA_CB_NONE) {
-        return -1;
-    }
+    if (!state || !target_map || cb == ZETA_CB_NONE) return -1;
     /* The window-3 rule, read off the window-0 mirror: it is the current map,
      * not state->bank_reg[], which the syscall trap does not update - it writes
      * the ports directly. */
-    if (target_map->pages[3] != muzix_live_banks[3]) {
-        return -1;
-    }
-    if (g_context_depth >= ZETA_CONTEXT_DEPTH_MAX) {
-        return -1;
-    }
+    if (target_map->pages[3] != muzix_live_banks[3]) return -1;
+    if (g_context_depth >= ZETA_CONTEXT_DEPTH_MAX) return -1;
 
     /* Claim the slot and drop the depth *before* the callback.  It may enter a
      * process and never come back; if the depth were released only on the
@@ -313,18 +305,10 @@ static int map_call_impl(zeta_state_t *state,
 
 zeta_callback_id_t zeta_callback_from_fn(int (*func)(void *))
 {
-    if (func == copy_page_to_kernel_callback) {
-        return ZETA_CB_COPY_PAGE_TO_KERNEL;
-    }
-    if (func == copy_user_to_kernel_callback) {
-        return ZETA_CB_COPY_USER_TO_KERNEL;
-    }
-    if (func == copy_kernel_to_user_callback) {
-        return ZETA_CB_COPY_KERNEL_TO_USER;
-    }
-    if (func == copy_rom_to_kernel_callback) {
-        return ZETA_CB_COPY_ROM_TO_KERNEL;
-    }
+    if (func == copy_page_to_kernel_callback) return ZETA_CB_COPY_PAGE_TO_KERNEL;
+    if (func == copy_user_to_kernel_callback) return ZETA_CB_COPY_USER_TO_KERNEL;
+    if (func == copy_kernel_to_user_callback) return ZETA_CB_COPY_KERNEL_TO_USER;
+    if (func == copy_rom_to_kernel_callback) return ZETA_CB_COPY_ROM_TO_KERNEL;
     return ZETA_CB_NONE;
 }
 
@@ -399,8 +383,8 @@ static void copy_temp_map(const zeta_state_t *state,
 
 /* --- Copy operations using callback mechanism (execute in region 0) --- */
 
-static int copy_page_to_kernel_callback(void *arg)
-{
+static int
+copy_page_to_kernel_callback(void *arg) {
     struct {
         zeta_state_t *state;
         uint16_t address;
@@ -424,25 +408,17 @@ int zeta_copy_page_to_kernel(zeta_state_t *state,
                               uint8_t *dst,
                               size_t len)
 {
-    if (!state || !dst || region > 3) {
-        return -1;
-    }
+    if (!state || !dst || region > 3) return -1;
     /* offset + len has to stay inside the one 16 KiB window, otherwise the copy
      * runs off the end of the mapped page and into the next region's. */
-    if ((uint32_t)offset + (uint32_t)len > (uint32_t)ZETA_BANK_SIZE) {
-        return -1;
-    }
+    if ((uint32_t)offset + (uint32_t)len > (uint32_t)ZETA_BANK_SIZE) return -1;
     /* Region 0 is the kernel's window and write_all_banks() rewrites pages[0]
      * back to 0x20 whatever the temp map asked for.  A region-0 read therefore
      * cannot honour its `page` argument at all: it returned the kernel's own
      * page 0x20 and the caller saw it as the requested page's contents. */
-    if (region == 0) {
-        return -1;
-    }
+    if (region == 0) return -1;
     /* Region 3 is the kernel's own window - see map_call_impl(). */
-    if (region == 3) {
-        return -1;
-    }
+    if (region == 3) return -1;
 
     process_map_t temp_map;
     copy_temp_map(state, page, region, &temp_map);
@@ -490,9 +466,7 @@ int zeta_copy_rom_page_to_kernel(zeta_state_t *state,
         uint16_t len;
     } ctx;
 
-    if (!state || !dst || len == 0) {
-        return -1;
-    }
+    if (!state || !dst || len == 0) return -1;
     /* One window only. A read that starts past its end, or that would run past
      * it, has to be refused: the bytes above the window belong to the next one,
      * which during a syscall is the process's text page, and reading them as
@@ -501,9 +475,7 @@ int zeta_copy_rom_page_to_kernel(zeta_state_t *state,
         (uint32_t)offset + (uint32_t)len > (uint32_t)ZETA_BANK_SIZE) {
         return -1;
     }
-    if (len > 0xffffu) {
-        return -1;
-    }
+    if (len > 0xffffu) return -1;
 
     /* Region 1 is the staging window. The kernel map is already installed when
      * this runs (the syscall entry installs it before dispatching), so a temp
@@ -519,8 +491,8 @@ int zeta_copy_rom_page_to_kernel(zeta_state_t *state,
                                    ZETA_CB_COPY_ROM_TO_KERNEL, &ctx);
 }
 
-static int copy_kernel_to_user_callback(void *arg)
-{
+static int
+copy_kernel_to_user_callback(void *arg) {
     struct {
         zeta_state_t *state;
         uint16_t user_addr;
@@ -563,9 +535,7 @@ int zeta_copy_kernel_to_user(zeta_state_t *state,
     uint16_t i;
     uint8_t region;
 
-    if (!state || !dst_map || !src || len > sizeof(g_copy_staging)) {
-        return -1;
-    }
+    if (!state || !dst_map || !src || len > sizeof(g_copy_staging)) return -1;
 
     region = (uint8_t)(user_addr >> 14);
     if (region > 3 ||
@@ -579,14 +549,10 @@ int zeta_copy_kernel_to_user(zeta_state_t *state,
      * destination below 0x4000 was therefore always a write into kernel code,
      * whatever dst_map said.  src_vir/dst_vir is caller-supplied, so the only
      * safe answer to a region-0 request is to refuse it. */
-    if (region == 0) {
-        return -1;
-    }
+    if (region == 0) return -1;
     /* Staging into the process's own page 3 would overwrite the kernel buffer
      * the data came from, and the callback frame would live there too. */
-    if (region == 3) {
-        return -1;
-    }
+    if (region == 3) return -1;
 
     /* Stage before the switch: while window 3 still maps kernel page 0x23 both
      * the source and the staging buffer are reachable.
@@ -616,8 +582,8 @@ int zeta_copy_kernel_to_user(zeta_state_t *state,
      * banner arrives 1.3M instructions earlier with this change in place.
      *
      * A source inside window 1 - or a range that straddles its boundary from
-     * window 0 - still stages, because the switch would swap the page out from
-     * under the read.  The test is deliberately written so that a window-0
+     * window 0 - still stages, because the switch would swap the page out
+     * from under the read.  The test is deliberately written so that a window-0
      * source that ENDS below 0x4000 takes the direct path and everything
      * else does not: len is bounded by the staging size, so there is no
      * overflow to compute around. */
@@ -662,8 +628,8 @@ int zeta_copy_kernel_to_user(zeta_state_t *state,
                                    ZETA_CB_COPY_KERNEL_TO_USER, &ctx);
 }
 
-static int copy_user_to_kernel_callback(void *arg)
-{
+static int
+copy_user_to_kernel_callback(void *arg) {
     struct {
         zeta_state_t *state;
         uint16_t user_addr;
@@ -691,9 +657,7 @@ int zeta_copy_user_to_kernel(zeta_state_t *state,
     uint16_t i;
     uint8_t region;
 
-    if (!state || !src_map || !dst || len > sizeof(g_copy_staging)) {
-        return -1;
-    }
+    if (!state || !src_map || !dst || len > sizeof(g_copy_staging)) return -1;
 
     region = (uint8_t)(user_addr >> 14);
     if (region > 3 ||
@@ -704,14 +668,10 @@ int zeta_copy_user_to_kernel(zeta_state_t *state,
      * 0x0030 and _CODE from 0x0098.  Reading below 0x4000 returned kernel code
      * to userspace as if it were the process's own memory.  See the matching
      * check in zeta_copy_kernel_to_user(). */
-    if (region == 0) {
-        return -1;
-    }
+    if (region == 0) return -1;
     /* Same window-3 rule as above: the callback would read the process's page
      * 3 and drop the result straight into the kernel's staging buffer. */
-    if (region == 3) {
-        return -1;
-    }
+    if (region == 3) return -1;
 
     /* As in zeta_copy_kernel_to_user(): a region-2 source cannot be read by
      * switching window 2, because g_copy_staging - which this callback writes

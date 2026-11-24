@@ -20,7 +20,7 @@
 # Compiler and flags
 CC      ?= gcc
 CFLAGS  ?= -Wall -Wextra -Wpedantic -O2 -g
-CFLAGS  += -std=c99 -D_POSIX_C_SOURCE=200809L
+CFLAGS  += -std=c99 -D_POSIX_C_SOURCE=200809L -I../include
 LDFLAGS ?=
 
 # ASAN flags (can be enabled with make asan)
@@ -32,14 +32,14 @@ EMULATOR = z80pack-emu
 EMULATOR_ASAN = z80pack-emu-asan
 
 # Source files
-DS1302_SRCS = zeta_sbc_v2/emu_ds1302.c
+DS1302_SRCS = zeta_sbc_v2/emu_ds1302.c zeta_sbc_v2/w5100_model.c
 Z80_SRCS    = z80/z80.c
 Z80PACK_SRCS = z80pack/z80pack.c
 MAIN_SRCS   = main.c
 SRCS        = $(DS1302_SRCS) $(Z80_SRCS) $(Z80PACK_SRCS) $(MAIN_SRCS)
 
 # Object files
-DS1302_OBJS  = zeta_sbc_v2/emu_ds1302.o
+DS1302_OBJS  = zeta_sbc_v2/emu_ds1302.o zeta_sbc_v2/w5100_model.o
 Z80_OBJS     = z80/z80.o
 Z80PACK_OBJS = z80pack/z80pack.o
 MAIN_OBJS    = main.o
@@ -86,11 +86,11 @@ $(Z80_OBJS): $(Z80_DIR)/%.o : $(Z80_DIR)/%.c $(HDRS)
 
 # Z80pack objects
 $(Z80PACK_OBJS): $(Z80PACK_DIR)/%.o : $(Z80PACK_DIR)/%.c $(HDRS)
-	$(CC) $(CFLAGS) -MMD -MP -I$(Z80PACK_DIR) -I$(Z80_DIR) -c -o $@ $<
+	$(CC) $(CFLAGS) -MMD -MP -I$(Z80PACK_DIR) -I$(Z80_DIR) -I$(DS1302_DIR) -c -o $@ $<
 
 # Main objects
 $(MAIN_OBJS): %.o : %.c $(HDRS)
-	$(CC) $(CFLAGS) -MMD -MP -I$(Z80PACK_DIR) -I$(Z80_DIR) -c -o $@ $<
+	$(CC) $(CFLAGS) -MMD -MP -I$(Z80PACK_DIR) -I$(Z80_DIR) -I$(DS1302_DIR) -c -o $@ $<
 
 # Clean target - fixed to handle directory named 'z80pack'
 .PHONY: clean

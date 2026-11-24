@@ -1,8 +1,7 @@
 #ifndef MUZIX_EXEC_LOADER_H
 #define MUZIX_EXEC_LOADER_H
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "ztypes.h"
 
 #include "../mm/mm_service.h"
 #include "../platform/zeta-v2/rtc_ds1302.h"

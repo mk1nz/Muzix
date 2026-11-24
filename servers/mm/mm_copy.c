@@ -1,6 +1,6 @@
 #include "mm_copy.h"
 #include "syscall.h"
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_ZETA_COPY_STAGING 256
 

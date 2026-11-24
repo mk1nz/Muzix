@@ -2,10 +2,10 @@
 
 #include "../../lib/syscall.h"
 
-#include <string.h>
+#include "libc.h"
 
-static int test_syscall_runtime(void)
-{
+static int
+test_syscall_runtime(void) {
     muzix_kernel_loop_t loop;
     muzix_zeta_syscall_runtime_t runtime;
     muzix_fs_service_t fs;
@@ -52,7 +52,7 @@ static int test_syscall_runtime(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_syscall_runtime();
 }

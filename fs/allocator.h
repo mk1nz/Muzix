@@ -1,7 +1,7 @@
 #ifndef MUZIX_FS_ALLOCATOR_H
 #define MUZIX_FS_ALLOCATOR_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 /*
  * Zone ceiling, and it is the device's, not a preference: 384 KiB of ROMFS at

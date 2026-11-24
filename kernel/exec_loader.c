@@ -1,6 +1,6 @@
 #include "exec_loader.h"
 
-#include <string.h>
+#include "libc.h"
 
 #include "syscalls.h"
 #include "proc_table.h"
@@ -104,8 +104,8 @@ static int exec_open_path(const char *path, int flags)
     }
 }
 
-static int exec_close(int fd)
-{
+static int
+exec_close(int fd) {
     if (g_exec_use_ipc) {
         return exec_ipc_close(fd);
     } else {
@@ -113,8 +113,8 @@ static int exec_close(int fd)
     }
 }
 
-static int exec_read(int fd, void *buf, size_t count, size_t *result)
-{
+static int
+exec_read(int fd, void *buf, size_t count, size_t *result) {
     if (g_exec_use_ipc) {
         return exec_ipc_read(fd, buf, count, result);
     } else {
@@ -122,8 +122,8 @@ static int exec_read(int fd, void *buf, size_t count, size_t *result)
     }
 }
 
-static int exec_fstat(int fd, void *stat)
-{
+static int
+exec_fstat(int fd, void *stat) {
     if (g_exec_use_ipc) {
         return exec_ipc_fstat(fd, stat);
     } else {
@@ -153,8 +153,8 @@ static int exec_ipc_open_path(const char *path, int flags)
     return (ipc_result == MUZIX_IPC_OK) ? msg.m1_i1 : -1;
 }
 
-static int exec_ipc_close(int fd)
-{
+static int
+exec_ipc_close(int fd) {
     muzix_ipc_message_t msg;
     memset(&msg, 0, sizeof(msg));
     msg.m_type = MUZIX_USER_SYS_CLOSE;
@@ -173,8 +173,8 @@ static int exec_ipc_close(int fd)
     return (ipc_result == MUZIX_IPC_OK) ? msg.m1_i1 : -1;
 }
 
-static int exec_ipc_read(int fd, void *buf, size_t count, size_t *result)
-{
+static int
+exec_ipc_read(int fd, void *buf, size_t count, size_t *result) {
     muzix_ipc_message_t msg;
     memset(&msg, 0, sizeof(msg));
     msg.m_type = MUZIX_USER_SYS_READ;
@@ -198,8 +198,8 @@ static int exec_ipc_read(int fd, void *buf, size_t count, size_t *result)
     return (ipc_result == MUZIX_IPC_OK) ? 0 : -1;
 }
 
-static int exec_ipc_fstat(int fd, void *stat)
-{
+static int
+exec_ipc_fstat(int fd, void *stat) {
     muzix_ipc_message_t msg;
     memset(&msg, 0, sizeof(msg));
     msg.m_type = MUZIX_USER_SYS_FSTAT;
@@ -234,9 +234,7 @@ static int exec_rom_read_inode(uint16_t inode_num, uint8_t *inode_buf)
     uint16_t inode_off = (inode_num * EXEC_INODE_SIZE) % EXEC_BLOCK_SIZE;
     uint8_t block_buf[512];
 
-    if (exec_rom_read_block(inode_block, block_buf) != 0) {
-        return -1;
-    }
+    if (exec_rom_read_block(inode_block, block_buf) != 0) return -1;
     memcpy(inode_buf, &block_buf[inode_off], EXEC_INODE_SIZE);
     return 0;
 }
@@ -255,19 +253,13 @@ static uint16_t exec_rom_lookup_in_dir(uint16_t dir_inode, const char *name, uin
     uint16_t dir_zone;
     uint16_t i;
 
-    if (exec_rom_read_inode(dir_inode, inode_buf) != 0) {
-        return 0;
-    }
+    if (exec_rom_read_inode(dir_inode, inode_buf) != 0) return 0;
 
     /* Directory zone 0 holds the directory entries */
     dir_zone = inode_buf[14] | (inode_buf[15] << 8);
-    if (dir_zone == 0) {
-        return 0;
-    }
+    if (dir_zone == 0) return 0;
 
-    if (exec_rom_read_zone(dir_zone, dir_block) != 0) {
-        return 0;
-    }
+    if (exec_rom_read_zone(dir_zone, dir_block) != 0) return 0;
 
     /* Search directory entries: 16 bytes each, 32 entries per 512-byte block */
     for (i = 0; i < 32; i++) {
@@ -285,8 +277,8 @@ static uint16_t exec_rom_lookup_in_dir(uint16_t dir_inode, const char *name, uin
     return 0;
 }
 
-static int exec_rom_open_path(const char *path, int flags)
-{
+static int
+exec_rom_open_path(const char *path, int flags) {
     (void)flags;
 
     uint16_t current_inode = EXEC_FS_ROOT_INODE;  /* Start at root */
@@ -314,9 +306,7 @@ static int exec_rom_open_path(const char *path, int flags)
 
         /* Look up this component in the current directory */
         uint16_t next_inode = exec_rom_lookup_in_dir(current_inode, comp_start, comp_len);
-        if (next_inode == 0) {
-            return -1;
-        }
+        if (next_inode == 0) return -1;
         current_inode = next_inode;
 
         /* Skip slashes */
@@ -334,14 +324,14 @@ static int exec_rom_open_path(const char *path, int flags)
     return current_inode;  /* Return inode number as handle */
 }
 
-static int exec_rom_close(int inode)
-{
+static int
+exec_rom_close(int inode) {
     (void)inode;
     return 0;
 }
 
-static int exec_rom_read(int inode, void *buf, size_t count, size_t *result)
-{
+static int
+exec_rom_read(int inode, void *buf, size_t count, size_t *result) {
     
     uint16_t zones[7];
     uint16_t indirect_zones[256];
@@ -354,9 +344,7 @@ static int exec_rom_read(int inode, void *buf, size_t count, size_t *result)
         /* Inode table is at blocks 3-4 (2 blocks = 1024 bytes = 32 inodes max) */
         uint8_t inode_block[512];
         uint8_t inode_block_num = 3 + (inode >> 4);  /* 16 inodes per block */
-        if (exec_rom_read_block(inode_block_num, inode_block) != 0) {
-            return -1;
-        }
+        if (exec_rom_read_block(inode_block_num, inode_block) != 0) return -1;
         
         /* Get inode entry (32 bytes each) - index within block */
         uint8_t *inode_entry = &inode_block[(inode & 0xF) * 32];
@@ -426,9 +414,7 @@ static int exec_rom_read(int inode, void *buf, size_t count, size_t *result)
         if (zone == 0) break;
         
         uint8_t block[512];
-        if (exec_rom_read_block(zone, block) != 0) {
-            return -1;
-        }
+        if (exec_rom_read_block(zone, block) != 0) return -1;
         
         uint16_t zone_remaining = 512;
         uint8_t *src = block;
@@ -451,14 +437,12 @@ static int exec_rom_read(int inode, void *buf, size_t count, size_t *result)
     return 0;
 }
 
-static int exec_rom_fstat(int inode, void *stat)
-{
+static int
+exec_rom_fstat(int inode, void *stat) {
     
     uint8_t inode_block[512];
     uint8_t inode_block_num = 3 + (inode >> 4);  /* 16 inodes per block */
-    if (exec_rom_read_block(inode_block_num, inode_block) != 0) {
-        return -1;
-    }
+    if (exec_rom_read_block(inode_block_num, inode_block) != 0) return -1;
     
     uint8_t *inode_entry = &inode_block[(inode & 0xF) * 32];
     memcpy(stat, inode_entry, 32);
@@ -471,8 +455,8 @@ void muzix_exec_enable_ipc(void)
     g_exec_use_ipc = true;
 }
 
-void muzix_exec_set_ipc_mode(bool use_ipc)
-{
+void
+muzix_exec_set_ipc_mode(bool use_ipc) {
     g_exec_use_ipc = use_ipc;
 }
 
@@ -566,16 +550,14 @@ uint8_t muzix_boot_rtc_state;
 int muzix_exec_load_for_slot(const char *path, const char *const *argv,
                              int slot)
 {
-    if (!path) {
-        return -1;
-    }
+    if (!path) return -1;
     g_muzix_exec_load_args.slot = slot;
     g_muzix_exec_load_args.path = path;
     g_muzix_exec_load_args.argv = argv;
     return muzix_exec_load();
 }
-int muzix_exec_load(void)
-{
+int
+muzix_exec_load(void) {
     /* Manual 16-bit copy to avoid SDCC codegen bug on struct field access */
     {
         uint8_t *src = (uint8_t *)&g_muzix_exec_load_args + 2;
@@ -889,9 +871,7 @@ if (muzix_exec_copy_argv(g_exec_mm, &proc_map,
 static int muzix_exec_copy_argv(muzix_mm_service_t *mm, const process_map_t *dst_map,
                            uint16_t stack_top, int *out_argc, uint16_t *out_argv_ptr)
 {
-    if (!mm || !out_argc || !out_argv_ptr) {
-        return -1;
-    }
+    if (!mm || !out_argc || !out_argv_ptr) return -1;
 
     const char *const *argv = g_exec_argv_ptrs;
     int argc = 0;
@@ -923,9 +903,8 @@ if (argc == 0) {
         return 0;
     }
 
-    uint16_t argv_ptr = stack_top;
-    uint8_t *stack_base = (uint8_t *)(stack_top - argc * 2 - 256);
-    uint16_t argv_array_addr = (uint16_t)(stack_top - argc * 2);
+    uint8_t *stack_base = (uint8_t *)(MUZIX_EXEC_SP_ADDR - argc * 2 - 256);
+    uint16_t argv_array_addr = (uint16_t)(MUZIX_EXEC_SP_ADDR - argc * 2);
 
     /* Place each string and record where it went, in the same pass.
      *

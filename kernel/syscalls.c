@@ -1,6 +1,6 @@
 #include "syscalls.h"
 #include "exec_loader.h"
-#include <string.h>
+#include "libc.h"
 
 #include "../fs/fs_service.h"
 #include "proc_context.h"
@@ -61,22 +61,18 @@ uint8_t k_ioctl[8];
 static muzix_kernel_proc_table_t *muzix_proc_table(
     muzix_userspace_syscall_context_t *ctx)
 {
-    if (!ctx || !ctx->kernel || !ctx->kernel->loop) {
-        return 0;
-    }
+    if (!ctx || !ctx->kernel || !ctx->kernel->loop) return 0;
     return &ctx->kernel->loop->system.startup.proc_table;
 }
 
-int muzix_current_slot(muzix_userspace_syscall_context_t *ctx)
-{
+int
+muzix_current_slot(muzix_userspace_syscall_context_t *ctx) {
     muzix_kernel_proc_table_t *table;
     int current_pid;
     int slot;
 
     table = muzix_proc_table(ctx);
-    if (!table) {
-        return -1;
-    }
+    if (!table) return -1;
 
     /* The table's `current` is the answer, and it is maintained by both the
      * scheduler and the context switch, so it moves with the CPU. Going via
@@ -95,9 +91,7 @@ int muzix_current_slot(muzix_userspace_syscall_context_t *ctx)
     }
 
     current_pid = muzix_kernel_loop_current_pid(ctx->kernel->loop);
-    if (current_pid < 0) {
-        return -1;
-    }
+    if (current_pid < 0) return -1;
     for (slot = 0; slot < MUZIX_PROC_TABLE_MAX; slot++) {
         if (table->slots[slot].active &&
             table->slots[slot].pid == (uint8_t)current_pid) {
@@ -113,9 +107,7 @@ muzix_proc_slot_t *muzix_current_process(
     muzix_kernel_proc_table_t *table = muzix_proc_table(ctx);
     int slot = muzix_current_slot(ctx);
 
-    if (!table || slot < 0) {
-        return 0;
-    }
+    if (!table || slot < 0) return 0;
     return &table->slots[slot];
 }
 
@@ -127,13 +119,9 @@ int muzix_copy_user_from_current(
 {
     int slot = muzix_current_slot(ctx);
     muzix_mm_service_t *mm;
-    if (slot < 0 || !ctx->kernel || !ctx->kernel->loop || !buffer) {
-        return -1;
-    }
+    if (slot < 0 || !ctx->kernel || !ctx->kernel->loop || !buffer) return -1;
     mm = ctx->kernel->loop->mm;
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     return muzix_mm_copy_user_to_kernel(mm, (uint8_t)slot,
                                          address, buffer, (uint16_t)length);
 }
@@ -146,13 +134,9 @@ int muzix_copy_user_to_current(
 {
     int slot = muzix_current_slot(ctx);
     muzix_mm_service_t *mm;
-    if (slot < 0 || !ctx->kernel || !ctx->kernel->loop || !buffer) {
-        return -1;
-    }
+    if (slot < 0 || !ctx->kernel || !ctx->kernel->loop || !buffer) return -1;
     mm = ctx->kernel->loop->mm;
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     return muzix_mm_copy_kernel_to_user(mm, (uint8_t)slot,
                                          address, buffer, (uint16_t)length);
 }
@@ -166,13 +150,9 @@ int muzix_copy_from_proc(
     uint16_t length)
 {
     muzix_mm_service_t *mm;
-    if (target_slot >= MUZIX_PROC_TABLE_MAX || !ctx->kernel || !ctx->kernel->loop || !buffer) {
-        return -1;
-    }
+    if (target_slot >= MUZIX_PROC_TABLE_MAX || !ctx->kernel || !ctx->kernel->loop || !buffer) return -1;
     mm = ctx->kernel->loop->mm;
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     return muzix_mm_copy_user_to_kernel(mm, target_slot, target_addr, buffer, length);
 }
 
@@ -218,16 +198,10 @@ int muzix_copy_client_to_server(
 {
     muzix_mm_service_t *mm;
 
-    if (!ctx || !ctx->kernel || !ctx->kernel->loop) {
-        return -1;
-    }
-    if (client_slot >= MUZIX_PROC_TABLE_MAX || server_slot >= MUZIX_PROC_TABLE_MAX) {
-        return -1;
-    }
+    if (!ctx || !ctx->kernel || !ctx->kernel->loop) return -1;
+    if (client_slot >= MUZIX_PROC_TABLE_MAX || server_slot >= MUZIX_PROC_TABLE_MAX) return -1;
     mm = ctx->kernel->loop->mm;
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     return muzix_mm_copy_user_to_user(mm, client_slot, client_addr,
                                       server_slot, server_addr, length);
 }
@@ -242,16 +216,10 @@ int muzix_copy_server_to_client(
 {
     muzix_mm_service_t *mm;
 
-    if (!ctx || !ctx->kernel || !ctx->kernel->loop) {
-        return -1;
-    }
-    if (client_slot >= MUZIX_PROC_TABLE_MAX || server_slot >= MUZIX_PROC_TABLE_MAX) {
-        return -1;
-    }
+    if (!ctx || !ctx->kernel || !ctx->kernel->loop) return -1;
+    if (client_slot >= MUZIX_PROC_TABLE_MAX || server_slot >= MUZIX_PROC_TABLE_MAX) return -1;
     mm = ctx->kernel->loop->mm;
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     /*
      * THE OPERANDS ARE SWAPPED, AND THAT IS THE WHOLE FUNCTION.
      *
@@ -278,33 +246,15 @@ int muzix_copy_to_proc(
     uint16_t length)
 {
     muzix_mm_service_t *mm;
-    if (target_slot >= MUZIX_PROC_TABLE_MAX || !ctx->kernel || !ctx->kernel->loop || !buffer) {
-        return -1;
-    }
+    if (target_slot >= MUZIX_PROC_TABLE_MAX || !ctx->kernel || !ctx->kernel->loop || !buffer) return -1;
     mm = ctx->kernel->loop->mm;
-    if (!mm) {
-        return -1;
-    }
+    if (!mm) return -1;
     return muzix_mm_copy_kernel_to_user(mm, target_slot, target_addr, buffer, length);
 }
 
-static muzix_proc_slot_t *muzix_slot_process(
-    muzix_userspace_syscall_context_t *ctx,
-    int32_t index)
-{
-    muzix_kernel_proc_table_t *table = muzix_proc_table(ctx);
-
-    if (!table || index < 0 || index >= MUZIX_PROC_TABLE_MAX) {
-        return 0;
-    }
-    return &table->slots[index];
-}
-
-int muzix_handle_syscall(muzix_syscall_context_t *ctx, const muzix_syscall_t *call)
-{
-    if (!ctx || !call) {
-        return MUZIX_SYSCALL_FAIL;
-    }
+int
+muzix_handle_syscall(muzix_syscall_context_t *ctx, const muzix_syscall_t *call) {
+    if (!ctx || !call) return MUZIX_SYSCALL_FAIL;
 
     switch (call->call) {
     case MUZIX_SYS_COPY:
@@ -318,8 +268,8 @@ int muzix_handle_syscall(muzix_syscall_context_t *ctx, const muzix_syscall_t *ca
     }
 }
 
-int muzix_sys_copy_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call)
-{
+int
+muzix_sys_copy_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call) {
     const muzix_proc_slot_t *src_slot = 0;
     const muzix_proc_slot_t *dst_slot = 0;
     int slot;
@@ -343,9 +293,7 @@ int muzix_sys_copy_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t 
         }
     }
 
-    if (!src_slot || !dst_slot) {
-        return MUZIX_SYSCALL_FAIL;
-    }
+    if (!src_slot || !dst_slot) return MUZIX_SYSCALL_FAIL;
 
     return muzix_mm_copy_maps(
                ctx->mm, &src_slot->mproc,
@@ -357,56 +305,18 @@ int muzix_sys_copy_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t 
            : MUZIX_SYSCALL_FAIL;
 }
 
-int muzix_sys_yield_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call)
-{
-    if (!ctx || !ctx->loop || !call) {
-        return MUZIX_SYSCALL_FAIL;
-    }
+int
+muzix_sys_yield_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call) {
+    if (!ctx || !ctx->loop || !call) return MUZIX_SYSCALL_FAIL;
     muzix_kernel_loop_yield(ctx->loop);
     return MUZIX_SYSCALL_OK;
 }
 
-int muzix_sys_exit_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call)
-{
-    if (!ctx || !ctx->loop || !call) {
-        return MUZIX_SYSCALL_FAIL;
-    }
+int
+muzix_sys_exit_dispatch(muzix_syscall_context_t *ctx, const muzix_syscall_t *call) {
+    if (!ctx || !ctx->loop || !call) return MUZIX_SYSCALL_FAIL;
     muzix_kernel_loop_switch_to_kernel(ctx->loop);
     return MUZIX_SYSCALL_OK;
-}
-
-/* Copy a NUL-terminated path from user memory into a kernel buffer.
- *
- * Every filesystem entry point takes a `const char *path` and walks it itself.
- * Passing a user address straight through means the kernel dereferences it with
- * the KERNEL bank map installed: a path below 0x4000 reads the boot stub, a
- * path in windows 1-3 reads kernel code, and the filesystem then operates on
- * whatever it found. The bound is also what makes this safe - an unterminated
- * user string is a fault, not an unbounded read. */
-static int muzix_copy_user_string(
-    muzix_userspace_syscall_context_t *ctx,
-    uint16_t address,
-    char *buffer,
-    size_t max)
-{
-    size_t n = 0;
-
-    if (!buffer || max == 0) {
-        return -1;
-    }
-    while (n < max - 1) {
-        uint8_t c;
-
-        if (muzix_copy_user_from_current(ctx, (uint16_t)(address + n), &c, 1) != 0) {
-            return -1;
-        }
-        buffer[n++] = (char)c;
-        if (c == 0) {
-            return 0;
-        }
-    }
-    buffer[max - 1] = 0;
-    return -1;
 }
 
 /* The syscall body, and the non-IPC fallback: kernel-internal numbers that no
@@ -456,9 +366,7 @@ int32_t muzix_dispatch_userspace_syscall(
 {
     (void)arg1; (void)arg2; (void)arg3;
 
-    if (!ctx) {
-        return -1;
-    }
+    if (!ctx) return -1;
 
     switch (syscall_num) {
     case MUZIX_SYS_COPY:

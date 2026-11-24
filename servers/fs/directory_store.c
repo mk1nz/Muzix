@@ -1,16 +1,16 @@
 #include "directory_store.h"
 
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_FS_DIR_ENTRY_SIZE 16u
 
-static uint16_t muzix_fs_dir_get16(const uint8_t *data)
-{
+static uint16_t
+muzix_fs_dir_get16(const uint8_t *data) {
     return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
 }
 
-static void muzix_fs_dir_put16(uint8_t *data, uint16_t value)
-{
+static void
+muzix_fs_dir_put16(uint8_t *data, uint16_t value) {
     data[0] = (uint8_t)value;
     data[1] = (uint8_t)(value >> 8);
 }

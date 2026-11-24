@@ -1,6 +1,6 @@
 #include "superblock.h"
 
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_FS_SUPERBLOCK_BLOCK 1u
 
@@ -13,8 +13,8 @@ static void muzix_fs_put16(uint8_t *data, uint16_t value)
 
 #endif /* MUZIX_ENABLE_FORMAT */
 
-static uint16_t muzix_fs_get16(const uint8_t *data)
-{
+static uint16_t
+muzix_fs_get16(const uint8_t *data) {
     return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
 }
 
@@ -29,8 +29,8 @@ static void muzix_fs_put32(uint8_t *data, uint32_t value)
 
 #endif /* MUZIX_ENABLE_FORMAT */
 
-static uint32_t muzix_fs_get32(const uint8_t *data)
-{
+static uint32_t
+muzix_fs_get32(const uint8_t *data) {
     return (uint32_t)data[0] |
            ((uint32_t)data[1] << 8) |
            ((uint32_t)data[2] << 16) |
@@ -88,8 +88,8 @@ int muzix_fs_superblock_format(muzix_fs_superblock_state_t *state,
 }
 #endif /* MUZIX_ENABLE_FORMAT */
 
-int muzix_fs_superblock_load(muzix_fs_superblock_state_t *state)
-{
+int
+muzix_fs_superblock_load(muzix_fs_superblock_state_t *state) {
     uint8_t *data;
 
     if (!state || !state->cache) {
@@ -112,8 +112,8 @@ int muzix_fs_superblock_load(muzix_fs_superblock_state_t *state)
     return muzix_fs_superblock_valid(state) ? 0 : -1;
 }
 
-int muzix_fs_superblock_valid(const muzix_fs_superblock_state_t *state)
-{
+int
+muzix_fs_superblock_valid(const muzix_fs_superblock_state_t *state) {
     if (!state || !state->loaded || state->value.magic != MUZIX_FS_MAGIC ||
         state->value.ninodes == 0 || state->value.nzones == 0 ||
         state->value.first_data_zone >= state->value.nzones) {

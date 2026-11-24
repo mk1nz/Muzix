@@ -16,8 +16,8 @@
 #include "system_service.h"
 #include "kernel_loop.h"
 
-static int test_system_service(void)
-{
+static int
+test_system_service(void) {
     muzix_kernel_loop_t loop;
     muzix_system_service_t svc;
     process_map_t kernel_map = {{7, 7, 7, 7}};
@@ -155,7 +155,7 @@ static int test_system_service(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_system_service();
 }

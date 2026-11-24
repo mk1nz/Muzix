@@ -1,7 +1,7 @@
 #ifndef MUZIX_INODE_TABLE_H
 #define MUZIX_INODE_TABLE_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "fs_types.h"
 
@@ -20,7 +20,7 @@
  * gate in tools/check_kernel_layout.rb stays authoritative when changing this
  * value.
  */
-#define MUZIX_FS_INODE_SLOTS 20u
+#define MUZIX_FS_INODE_SLOTS 16u
 
 /*
  * The on-disk inode table is TWO blocks, 3 and 4, which is what
@@ -36,7 +36,7 @@
  * its 2 blocks can describe sixteen files, and refusing it for carrying more
  * inodes than one block holds would make every real image unmountable.
  */
-#define MUZIX_FS_INODE_TABLE_BLOCKS 2u
+#define MUZIX_FS_INODE_TABLE_BLOCKS 3u
 
 /* Records the on-disk inode table can hold: one block's worth per block. */
 #define MUZIX_FS_INODE_TABLE_RECORDS \

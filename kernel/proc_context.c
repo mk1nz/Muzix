@@ -1,6 +1,6 @@
 #include "../platform/zeta-v2/context_switch.h"
 
-#include <string.h>
+#include "libc.h"
 
 #include "../kernel/proc_table.h"
 #include "../mm/mm_service.h"
@@ -19,37 +19,56 @@ extern uint8_t muzix_resume_banks[4];
 extern uint16_t muzix_switch_pending;
 
 #ifdef __SDCC__
-#define READ_RESUME_PC() ({ uint16_t v; __asm ld hl, (_muzix_resume_pc) ld e,(hl) inc hl ld d,(hl) ld v+0,e ld v+1,d __endasm; v; })
-#define READ_RESUME_SP() ({ uint16_t v; __asm ld hl, (_muzix_resume_sp) ld e,(hl) inc hl ld d,(hl) ld v+0,e ld v+1,d __endasm; v; })
-#define SET_SWITCH_PENDING() __asm ld hl, (_muzix_switch_pending) ld (hl), #1 __endasm
+/* Z80 inline assembly reads the resume PC/SP via HL to avoid SDCC's
+ * restriction on 16-bit register returns from inline asm. The statement
+ * expression returns the assembled 16-bit value. */
+#define READ_RESUME_PC() ({ \
+    uint16_t _v; \
+    __asm \
+    "ld hl, #_muzix_resume_pc\n" \
+    "ld e, (hl)\n" \
+    "inc hl\n" \
+    "ld d, (hl)\n" \
+    "ld _v, e\n" \
+    "ld _v+1, d\n" \
+    __endasm; \
+    _v; \
+})
+#define READ_RESUME_SP() ({ \
+    uint16_t _v; \
+    __asm \
+    "ld hl, #_muzix_resume_sp\n" \
+    "ld e, (hl)\n" \
+    "inc hl\n" \
+    "ld d, (hl)\n" \
+    "ld _v, e\n" \
+    "ld _v+1, d\n" \
+    __endasm; \
+    _v; \
+})
+#define SET_SWITCH_PENDING() __asm("ld hl, #_muzix_switch_pending\nld (hl), #1\n" __endasm)
 #else
 #define READ_RESUME_PC() muzix_resume_pc
 #define READ_RESUME_SP() muzix_resume_sp
 #define SET_SWITCH_PENDING() do { muzix_switch_pending = 1; } while(0)
 #endif
 
-int muzix_context_switch_to(muzix_kernel_proc_table_t *table, int slot)
-{
+int
+muzix_context_switch_to(muzix_kernel_proc_table_t *table, int slot) {
     muzix_proc_slot_t *target;
     uint16_t pc = 0;
     uint16_t sp = 0;
     uint16_t retval = 0;
 
-    if (!table || slot < 0 || slot >= MUZIX_PROC_TABLE_MAX) {
-        return -1;
-    }
+    if (!table || slot < 0 || slot >= MUZIX_PROC_TABLE_MAX) return -1;
 
     target = &table->slots[slot];
-    if (!target->active) {
-        return -1;
-    }
+    if (!target->active) return -1;
 
     /* A slot that has never been recorded cannot be resumed: its program counter
      * would be whatever the table was zeroed to, and jumping there lands the
      * machine in the boot stub.  Refuse instead. */
-    if (!muzix_proc_table_get_resume(table, slot, &pc, &sp, &retval)) {
-        return -1;
-    }
+    if (!muzix_proc_table_get_resume(table, slot, &pc, &sp, &retval)) return -1;
 
     /* Re-stamp before the jump, so the resumed process's next charge starts HERE
      * rather than where it left.  Together with the charge at the park side -
@@ -92,19 +111,17 @@ int muzix_context_switch_to(muzix_kernel_proc_table_t *table, int slot)
     return 0;
 }
 
-int muzix_context_save_current(muzix_kernel_proc_table_t *table,
-                               int slot,
-                               uint16_t retval)
-{
+int
+muzix_context_save_current(muzix_kernel_proc_table_t *table,
+                           int slot,
+                           uint16_t retval) {
     /* cppcheck-suppress uninitvar -- READ_RESUME_PC/SP fill their local in Z80
      * inline asm (lines 22-23); the analyser does not model asm, so it reports
      * a local that is in fact assigned by the instruction pair below. */
     uint16_t pc = READ_RESUME_PC();
     uint16_t sp = READ_RESUME_SP();
 
-    if (!table || slot < 0 || slot >= MUZIX_PROC_TABLE_MAX) {
-        return -1;
-    }
+    if (!table || slot < 0 || slot >= MUZIX_PROC_TABLE_MAX) return -1;
 
     /* The trap has already captured the outgoing process's resume point into
      * these two cells on the way in - while window 1 still held the process's

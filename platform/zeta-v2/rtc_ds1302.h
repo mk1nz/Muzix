@@ -1,7 +1,7 @@
 #ifndef MUZIX_ZETA_RTC_DS1302_H
 #define MUZIX_ZETA_RTC_DS1302_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 /*
  * DS1302 real-time clock, on the Zeta SBC V2.

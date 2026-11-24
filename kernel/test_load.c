@@ -32,8 +32,9 @@
  * machine reported 0.02 while being busy about 9% of the time.
  */
 
-#include <stdint.h>
-#include <stdio.h>
+#include "ztypes.h"
+#include "libc.h"
+#include <math.h>
 
 #include "proc_table.h"
 #include "load.h"
@@ -213,10 +214,10 @@ static int check_load_mul(void)
 
     /* 4. The production range is exact, not merely truncated: a Q14 operand
      *    times a Q14 operand shifted back down is always inside 16 bits. */
-    CHECK(muzix_load_mul(16384u, 16384u) == LOAD_Q14_SCALE, 8);
-    CHECK(muzix_load_mul(16384u, 1u) == 1u, 8);
-    CHECK(mul_reference(16384u, 16384u) <= 0xFFFFu, 8);
-    CHECK(mul_reference(16384u, 16385u) <= 0xFFFFu, 8);
+    CHECK(muzix_load_mul(16384u, 16384u) == LOAD_Q14_SCALE, 20);
+    CHECK(muzix_load_mul(16384u, 1u) == 1u, 20);
+    CHECK(mul_reference(16384u, 16384u) <= 0xFFFFu, 20);
+    CHECK(mul_reference(16384u, 16385u) <= 0xFFFFu, 20);
 
     printf("test_load: mul %lu pairs, %lu above 16 bits, ok\n", pairs,
            too_wide);
@@ -275,8 +276,88 @@ static void restart(muzix_kernel_proc_table_t *t, int emptied)
     }
 }
 
-int main(void)
+/* High-precision reference for the piecewise-constant EMA.
+ *
+ *   L(T) = L(0) exp(-T/tau)
+ *        + sum_i B_i (1 - exp(-dt_i/tau)) exp(-(T - t_i - dt_i)/tau)
+ *
+ * where t_i is the cumulative time before interval i and dt_i its duration.
+ * This is the exact solution of dL/dt = (B(t) - L)/tau for piecewise-constant
+ * B, and it is what the production recurrence computes when the per-interval
+ * coefficient is exact. */
+static double ref_ema(double l0, const uint16_t *ticks, const uint16_t *busy,
+                      int n, double tau)
 {
+    double total = 0.0;
+    double acc;
+    double t = 0.0;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        total += (double)ticks[i] / 120.0;
+    }
+    acc = l0 * exp(-total / tau);
+    t = 0.0;
+    for (i = 0; i < n; i++) {
+        double dt = (double)ticks[i] / 120.0;
+
+        acc += ((double)busy[i] / 16384.0) * (1.0 - exp(-dt / tau)) *
+               exp(-(total - t - dt) / tau);
+        t += dt;
+    }
+    return acc;
+}
+
+/* Run a sequence of (ticks, busy) intervals and return window 0. */
+static uint32_t run_seq(muzix_kernel_proc_table_t *t, const uint16_t *ticks,
+                        const uint16_t *busy, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        interval(t, ticks[i], busy[i]);
+    }
+    return muzix_load_window(0);
+}
+
+/* Compare a Q14 window against the high-precision reference.
+ * tol_q14 is the maximum permitted absolute error in Q14 LSB. */
+static int close_to(uint32_t got, double ref, uint32_t tol_q14)
+{
+    double want = ref * 16384.0;
+    double d = (double)got - want;
+
+    if (d < 0) d = -d;
+    if (d > (double)tol_q14) {
+        printf("  close_to: got=%u want=%.1f err=%.1f tol=%u\n",
+               got, want, (double)got - want, tol_q14);
+    }
+    return d <= (double)tol_q14;
+}
+
+static const double g_tau[3] = { 60.0, 300.0, 900.0 };
+
+/* Run a sequence and check all three windows against the high-precision
+ * reference for their respective time constants. */
+static int run_and_check(muzix_kernel_proc_table_t *t, const uint16_t *ticks,
+                         const uint16_t *busy, int n, int which)
+{
+    int w;
+
+    run_seq(t, ticks, busy, n);
+    for (w = 0; w < 3; w++) {
+        double ref = ref_ema(0.0, ticks, busy, n, g_tau[w]);
+        if (!close_to(muzix_load_window(w), ref, 20)) {
+            printf("case %d window %d: got=%u want=%.1f\n",
+                   which, w, muzix_load_window(w), ref * 16384.0);
+        }
+        CHECK(close_to(muzix_load_window(w), ref, 20), which);
+    }
+    return 0;
+}
+
+int
+main(void) {
     muzix_kernel_proc_table_t table;
     uint32_t before0;
     uint32_t before2;
@@ -471,23 +552,165 @@ int main(void)
         CHECK(muzix_load_window(1) > muzix_load_window(2), 6);
     }
 
-    /* 7. The fallback scale is calibrated for the installed 4 MHz oscillator.
-     *
-     * Half of one tick's 130-count capacity halted means half busy. With the
-     * former 240-count assumption this would incorrectly report about 73% busy. */
-    restart(&table, 0);
-    muzix_load_note_halted(65u);
-    g_tick = 1;
-    muzix_load_sample(&table, g_tick);
-    CHECK(muzix_load_window(0) > 8170u &&
-          muzix_load_window(0) < 8210u, 7);
+/* 7. The fallback scale is calibrated for the installed 4 MHz oscillator.
+ *
+ * Half of one tick's 7680-count capacity halted means half busy.
+ */
+restart(&table, 0);
+muzix_load_note_halted(3840u);
+g_tick = 1;
+muzix_load_sample(&table, g_tick);
+CHECK(muzix_load_window(0) > 8170u &&
+      muzix_load_window(0) < 8210u, 7);
 
     /* The measured scale is passed into load accounting, not just reported. */
     muzix_load_init(0, 240u);
-    muzix_load_note_halted(120u);
+    muzix_load_note_halted(3840u);
     g_tick = 1;
     muzix_load_sample(&table, g_tick);
     CHECK(muzix_load_window(0) == LOAD_Q14_SCALE / 2u, 9);
+
+    /* 10. Variable workload: 250 ms busy + 750 ms idle, from L=0.
+     *
+     * The busy 250 ms must contribute its own B, then the idle 750 ms decay
+     * it.  A whole-second quantiser that used only the last sample's B would
+     * read 0 here (the last sample is idle), which is the defect. */
+    {
+        uint16_t ticks[] = { 30, 90 };
+        uint16_t busy[]  = { LOAD_Q14_SCALE, 0 };
+
+        restart(&table, 0);
+        interval(&table, 120, 0);              /* seed L=0 */
+        run_and_check(&table, ticks, busy, 2, 10);
+    }
+
+    /* 11. 750 ms busy + 250 ms idle, from L=0. */
+    {
+        uint16_t ticks[] = { 90, 30 };
+        uint16_t busy[]  = { LOAD_Q14_SCALE, 0 };
+
+        restart(&table, 0);
+        interval(&table, 120, 0);
+        run_and_check(&table, ticks, busy, 2, 11);
+    }
+
+    /* 12. Alternating 100 ms busy/idle (5 pairs = 1 s). */
+    {
+        uint16_t ticks[10];
+        uint16_t busy[10];
+        int k;
+
+        for (k = 0; k < 10; k++) {
+            ticks[k] = 12;
+            busy[k] = (k % 2 == 0) ? LOAD_Q14_SCALE : 0;
+        }
+        restart(&table, 0);
+        interval(&table, 120, 0);
+        run_and_check(&table, ticks, busy, 10, 12);
+    }
+
+    /* 13. Irregular intervals with different busy fractions. */
+    {
+        uint16_t ticks[] = { 12, 30, 60, 18, 40, 80, 50, 70 };
+        uint16_t busy[]  = { LOAD_Q14_SCALE, LOAD_Q14_SCALE / 2,
+                             LOAD_Q14_SCALE, LOAD_Q14_SCALE / 4,
+                             0, LOAD_Q14_SCALE,
+                             (LOAD_Q14_SCALE / 4) * 3, LOAD_Q14_SCALE / 2 };
+
+        restart(&table, 0);
+        interval(&table, 120, 0);
+        run_and_check(&table, ticks, busy, 8, 13);
+    }
+
+    /* 14. Split vs unsplit with the same time-weighted workload.
+     *
+     * 250 ms busy + 750 ms idle has average busy 0.25.  One 1 s sample at 0.25
+     * must land within the fixed-point tolerance of the split sequence. */
+    {
+        uint16_t ticks_split[] = { 30, 90 };
+        uint16_t busy_split[]  = { LOAD_Q14_SCALE, 0 };
+        uint16_t ticks_one[]   = { 120 };
+        uint16_t busy_one[]    = { LOAD_Q14_SCALE / 4 };
+        uint32_t split[3];
+        uint32_t one[3];
+        int w;
+
+        restart(&table, 0);
+        interval(&table, 120, 0);
+        run_seq(&table, ticks_split, busy_split, 2);
+        for (w = 0; w < 3; w++) split[w] = muzix_load_window(w);
+
+        restart(&table, 0);
+        interval(&table, 120, 0);
+        run_seq(&table, ticks_one, busy_one, 1);
+        for (w = 0; w < 3; w++) one[w] = muzix_load_window(w);
+
+        for (w = 0; w < 3; w++) {
+            double ref_split = ref_ema(0.0, ticks_split, busy_split, 2, g_tau[w]);
+            double ref_one = ref_ema(0.0, ticks_one, busy_one, 1, g_tau[w]);
+
+            CHECK(close_to(split[w], ref_split, 20), 14);
+            CHECK(close_to(one[w], ref_one, 20), 14);
+            /* The two distributions of the same average differ by < 1 Q14 LSB. */
+            CHECK((split[w] > one[w] ? split[w] - one[w] : one[w] - split[w]) <= 8u, 14);
+        }
+    }
+
+    /* 15. Large-span boundary: a 65535-tick span must decompose without
+     *     overflow and drive all three windows essentially to zero. */
+    {
+        uint32_t w0;
+        int k;
+
+        restart(&table, 0);
+        interval(&table, 120, LOAD_Q14_SCALE);     /* seed L=1 */
+        /* 65535 idle ticks = 65535 * 7680 halted counts. */
+        for (k = 0; k < 7680; k++) {
+            muzix_load_note_halted(65535);
+        }
+        g_tick = (uint16_t)(g_tick + 65535);
+        muzix_load_sample(&table, g_tick);
+        w0 = muzix_load_window(0);
+        CHECK(w0 < 100u, 15);
+    }
+
+    /* 16. Fractional-decay coefficients, derived independently from
+     *     K_tau = round(2^22 / (120*tau)) << 6.  The expected value is computed
+     *     from the formula, not copied from the production array. */
+    {
+        int w;
+
+        for (w = 0; w < 3; w++) {
+            uint16_t expected = (uint16_t)((uint16_t)(4194304.0 / (120.0 * g_tau[w]) + 0.5) << 6);
+
+            if (muzix_load_frac_coef(w) != expected) {
+                printf("coef[%d] tau=%.0f got=%u want=%u\n",
+                       w, g_tau[w], muzix_load_frac_coef(w), expected);
+            }
+            CHECK(muzix_load_frac_coef(w) == expected, 16);
+        }
+    }
+
+    /* 17. Twelve-second busy period from zero - the reported scenario.
+     *     L = 1 - exp(-12/tau): 0.181 / 0.039 / 0.013. */
+    {
+        uint16_t ticks[] = { 120u * 12u };
+        uint16_t busy[]  = { LOAD_Q14_SCALE };
+        int w;
+
+        restart(&table, 0);
+        interval(&table, 120, 0);                   /* seed L=0 */
+        interval(&table, 120u * 12u, LOAD_Q14_SCALE); /* 12 s busy */
+        for (w = 0; w < 3; w++) {
+            double ref = ref_ema(0.0, ticks, busy, 1, g_tau[w]);
+
+            if (!close_to(muzix_load_window(w), ref, 20)) {
+                printf("case 17 window %d: got=%u want=%.1f\n",
+                       w, muzix_load_window(w), ref * 16384.0);
+            }
+            CHECK(close_to(muzix_load_window(w), ref, 20), 17);
+        }
+    }
 
     printf("test_load: ok\n");
     return 0;

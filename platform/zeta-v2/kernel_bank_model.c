@@ -5,7 +5,7 @@
 #include "trace.h"
 #include "bitmap_ops.h"
 
-#include <string.h>
+#include "libc.h"
 
 /* The page bitmap, and it is bytes rather than the uint32_t it used to be.
  *
@@ -27,8 +27,8 @@ static uint8_t g_used_pages[(ZETA_RAM_PAGES + 7u) / 8u];
  * handshake between two modules.
  */
 
-static void zeta_memory_mark(uint8_t page)
-{
+static void
+zeta_memory_mark(uint8_t page) {
     uint16_t index;
 
     if (page >= ZETA_RAM_PAGE_FIRST && page <= ZETA_RAM_PAGE_LAST) {
@@ -37,8 +37,8 @@ static void zeta_memory_mark(uint8_t page)
     }
 }
 
-void zeta_memory_init(const process_map_t *kernel_map)
-{
+void
+zeta_memory_init(const process_map_t *kernel_map) {
     uint8_t region;
 
     memset(g_used_pages, 0, sizeof(g_used_pages));
@@ -52,34 +52,30 @@ void zeta_memory_init(const process_map_t *kernel_map)
     zeta_memory_mark(ZETA_RAM_PAGE_LAST);
 }
 
-int zeta_memory_alloc_page(uint8_t *page)
-{
+int
+zeta_memory_alloc_page(uint8_t *page) {
     int16_t index;
 
-    if (!page) {
-        return -1;
-    }
+    if (!page) return -1;
     /* One call: scan, set and report.  bitmap_ops.s holds the walk; the
      * 32-bit mask loop this replaces is measured at ~3.5k T-states against
      * ~470T over the same four bytes. */
     index = muzix_bitmap_alloc(g_used_pages, (uint16_t)sizeof(g_used_pages));
-    if (index < 0) {
-        return -1;
-    }
+    if (index < 0) return -1;
     *page = (uint8_t)(ZETA_RAM_PAGE_FIRST + index);
     return 0;
 }
 
-void zeta_memory_release_page(uint8_t page)
-{
+void
+zeta_memory_release_page(uint8_t page) {
     if (page >= ZETA_RAM_PAGE_FIRST && page <= ZETA_RAM_PAGE_LAST) {
         muzix_bitmap_release(g_used_pages,
                              (uint16_t)(page - ZETA_RAM_PAGE_FIRST));
     }
 }
 
-void zeta_init(zeta_state_t *state)
-{
+void
+zeta_init(zeta_state_t *state) {
     if (!state) {
         return;
     }
@@ -95,15 +91,15 @@ void zeta_init(zeta_state_t *state)
     z80_outb(MUZIX_ZETA_BANK_PORT_3, state->bank_reg[3]);
 }
 
-void zeta_enable_paging(zeta_state_t *state, bool enable)
-{
+void
+zeta_enable_paging(zeta_state_t *state, bool enable) {
     if (state) {
         state->paging_enabled = enable;
     }
 }
 
-void zeta_refresh_visible(zeta_state_t *state)
-{
+void
+zeta_refresh_visible(zeta_state_t *state) {
     if (!state || !state->paging_enabled) {
         return;
     }
@@ -113,8 +109,8 @@ void zeta_refresh_visible(zeta_state_t *state)
     z80_outb(0x7b, state->bank_reg[3]);
 }
 
-void zeta_set_bank(zeta_state_t *state, int region, uint8_t page)
-{
+void
+zeta_set_bank(zeta_state_t *state, int region, uint8_t page) {
     if (!state || region < 0 || region > 3) {
         return;
     }
@@ -122,8 +118,8 @@ void zeta_set_bank(zeta_state_t *state, int region, uint8_t page)
     zeta_refresh_visible(state);
 }
 
-void zeta_map_kernel(zeta_state_t *state, uint8_t p0, uint8_t p1, uint8_t p2, uint8_t p3)
-{
+void
+zeta_map_kernel(zeta_state_t *state, uint8_t p0, uint8_t p1, uint8_t p2, uint8_t p3) {
     if (!state) {
         return;
     }
@@ -134,8 +130,8 @@ void zeta_map_kernel(zeta_state_t *state, uint8_t p0, uint8_t p1, uint8_t p2, ui
     zeta_refresh_visible(state);
 }
 
-void zeta_map_process(zeta_state_t *state, const process_map_t *map)
-{
+void
+zeta_map_process(zeta_state_t *state, const process_map_t *map) {
     if (!state || !map) {
         return;
     }
@@ -146,14 +142,14 @@ void zeta_map_process(zeta_state_t *state, const process_map_t *map)
     zeta_refresh_visible(state);
 }
 
-uint8_t zeta_read_visible(zeta_state_t *state, uint16_t addr)
-{
+uint8_t
+zeta_read_visible(zeta_state_t *state, uint16_t addr) {
     (void)state;
     return *((volatile uint8_t *)addr);
 }
 
-void zeta_write_visible(zeta_state_t *state, uint16_t addr, uint8_t value)
-{
+void
+zeta_write_visible(zeta_state_t *state, uint16_t addr, uint8_t value) {
     (void)state;
     *((volatile uint8_t *)addr) = value;
 }

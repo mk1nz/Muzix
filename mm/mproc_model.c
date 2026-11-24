@@ -1,21 +1,21 @@
 #include "mproc_model.h"
 
-#include <string.h>
+#include "libc.h"
 
-static uint8_t muzix_page_from_phys(uint32_t phys)
-{
+static uint8_t
+muzix_page_from_phys(uint32_t phys) {
      return (uint8_t)(phys >> 14);
 }
 
-void muzix_mproc_init(muzix_mproc_t *mp,
-                      uint32_t text_phys,
-                      uint32_t data_phys,
-                      uint32_t stack_phys,
-                      uint16_t text_len,
-                      uint16_t data_len,
-                      uint16_t stack_len,
-                      uint8_t pid)
-{
+void
+muzix_mproc_init(muzix_mproc_t *mp,
+                 uint32_t text_phys,
+                 uint32_t data_phys,
+                 uint32_t stack_phys,
+                 uint16_t text_len,
+                 uint16_t data_len,
+                 uint16_t stack_len,
+                 uint8_t pid) {
     if (!mp) {
         return;
     }
@@ -37,12 +37,12 @@ void muzix_mproc_init(muzix_mproc_t *mp,
     mp->mp_seg[MUZIX_SEG_STACK].mem_len = stack_len;
 }
 
-void muzix_mproc_set_seg(muzix_mproc_t *mp,
-                         int seg,
-                         uint16_t vir,
-                         uint8_t page,
-                         uint16_t len)
-{
+void
+muzix_mproc_set_seg(muzix_mproc_t *mp,
+                    int seg,
+                    uint16_t vir,
+                    uint8_t page,
+                    uint16_t len) {
     if (!mp || seg < 0 || seg >= MUZIX_NR_SEGS) {
         return;
     }
@@ -52,30 +52,11 @@ void muzix_mproc_set_seg(muzix_mproc_t *mp,
     mp->mp_seg[seg].mem_len = len;
 }
 
-void muzix_mproc_set_all_segs(muzix_mproc_t *mp, const muzix_seg_pages_t *pages)
-{
-    if (!mp || !pages) {
-        return;
-    }
-
-    mp->mp_seg[MUZIX_SEG_TEXT].mem_vir = 0;
-    mp->mp_seg[MUZIX_SEG_TEXT].mem_phys = (uint32_t)pages->text_page * ZETA_BANK_SIZE;
-    mp->mp_seg[MUZIX_SEG_TEXT].mem_len = 0x4000;
-
-    mp->mp_seg[MUZIX_SEG_DATA].mem_vir = 0;
-    mp->mp_seg[MUZIX_SEG_DATA].mem_phys = (uint32_t)pages->data_page * ZETA_BANK_SIZE;
-    mp->mp_seg[MUZIX_SEG_DATA].mem_len = 0x4000;
-
-    mp->mp_seg[MUZIX_SEG_STACK].mem_vir = 0;
-    mp->mp_seg[MUZIX_SEG_STACK].mem_phys = (uint32_t)pages->stack_page * ZETA_BANK_SIZE;
-    mp->mp_seg[MUZIX_SEG_STACK].mem_len = 0x4000;
-}
-
-int muzix_mproc_range_valid(const muzix_mproc_t *mp,
-                            int seg,
-                            uint16_t vir_addr,
-                            size_t bytes)
-{
+int
+muzix_mproc_range_valid(const muzix_mproc_t *mp,
+                        int seg,
+                        uint16_t vir_addr,
+                        size_t bytes) {
     const muzix_mem_map_t *m;
     uint16_t offset;
 
@@ -92,11 +73,11 @@ int muzix_mproc_range_valid(const muzix_mproc_t *mp,
     return bytes <= (size_t)m->mem_len && offset <= (uint16_t)(m->mem_len - bytes);
 }
 
-uint16_t muzix_mproc_umap(const muzix_mproc_t *mp,
-                         int seg,
-                         uint16_t vir_addr,
-                         uint16_t bytes)
-{
+uint16_t
+muzix_mproc_umap(const muzix_mproc_t *mp,
+                 int seg,
+                 uint16_t vir_addr,
+                 uint16_t bytes) {
     const muzix_mem_map_t *m;
     uint32_t base;
 
@@ -126,8 +107,8 @@ uint16_t muzix_mproc_umap(const muzix_mproc_t *mp,
  *
  * A segment with mem_len == 0 falls back to the kernel page rather than 0, so
  * an unset segment can never leave a writable window pointing at ROM. */
-void muzix_mproc_to_zeta_map(const muzix_mproc_t *mp, process_map_t *out)
-{
+void
+muzix_mproc_to_zeta_map(const muzix_mproc_t *mp, process_map_t *out) {
     process_map_t tmp = {{MUZIX_ZETA_KERNEL_BANK_0, MUZIX_ZETA_KERNEL_BANK_1,
                          MUZIX_ZETA_KERNEL_BANK_2, MUZIX_ZETA_KERNEL_BANK_3}};
 

@@ -68,56 +68,15 @@
  * adding it to libc, and this is eight lines of arithmetic.
  *
  * Adding the three windows cost none of it.  They arrive from the kernel already
- * in Q14, and print_q14() is the same function that formatted the boot figure, so
- * a second number line is a second call and no new arithmetic - no divide, no
- * multiply, nothing that could reach a helper this link does not have.
+ * in Q14, and print_q14() formats them directly - no divide, no multiply,
+ * nothing that could reach a helper this link does not have.
  */
 
 #include "../lib/libc.h"
+#include "../lib/lcd.h"
+#include "../lib/i2c.h"
 
 #define Q14 16384u          /* the busy fraction, scaled: 1.0 == 16384 */
-
-/* spent / capacity, as Q14, by subtraction.
- *
- * `spent` is clamped to `capacity` by the caller, so the quotient is at most
- * Q14 and the loop runs at most 16384 times - and the interval is a boot, not a
- * frame, so it runs exactly once.
- *
- * BOTH OPERANDS ARE SHIFTED DOWN FIRST, and this is a fix rather than a
- * refinement.  `spent << 14` loses its top bits once spent reaches 2^18 -
- * 262144 ticks, about thirty-six minutes of process-busy time - and after that
- * the answer is silently wrong, most visibly as 0.00 from a machine that has
- * plainly been working.  Both are halved together until capacity is under 2^18,
- * which restores room for the shift: the product then fits in 32 bits, because
- * spent <= capacity < 2^18.
- *
- * The precision lost that way is not visible at two decimals.  If k bits are
- * dropped, the shifted ratio differs from spent/capacity by under
- * 2^k/capacity_orig, and the loop stops as soon as capacity < 2^18, which
- * forces capacity_orig above 2^(17+k) - a relative error under 2^-17 (about
- * 0.0008%), and under 0.008 Q14 units against a quantum of 6.1e-5 of a unit.
- * A halving by literal 1 is a carry chain across the four bytes, not a call
- * out and not a __mullong route.
- */
-static uint32_t busy_fraction(uint32_t spent, uint32_t capacity)
-{
-    uint32_t scaled;
-    uint32_t whole = 0;
-
-    if (capacity == 0) {
-        return 0;
-    }
-    while (capacity >= 262144u) {    /* 2^18: spend this many bits on room */
-        capacity >>= 1;
-        spent >>= 1;
-    }
-    scaled = spent << 14;
-    while (scaled >= capacity) {
-        scaled -= capacity;
-        whole++;
-    }
-    return whole;
-}
 
 /* Q14 to "d.dd", by shifts only.
  *
@@ -135,10 +94,6 @@ static void print_q14(uint32_t value)
     putchar('.');
     hundredths = ((fraction << 6) + (fraction << 5) + (fraction << 2)) >> 14;
 
-    /* And the last two digits by subtraction rather than by / and % on a
-     * constant - a constant divisor is still a divisor, and ten is not special
-     * to the compiler on a target where division is a call to nowhere.
-     * hundredths is under 100, so this is at most nine iterations. */
     {
         uint32_t tens = 0;
 
@@ -151,18 +106,33 @@ static void print_q14(uint32_t value)
     }
 }
 
-int main(int argc, char *argv[])
-{
-    struct proc_info info[MUZIX_PROC_INFO_SLOTS];
-    uint32_t windows[3];
-    uint32_t charged = 0;
-    uint32_t capacity = 0;
-    uint32_t t;
-    int32_t seconds;
-    int slot;
+static void
+print_q14_lcd(uint32_t value) {
+    uint32_t fraction = value & (Q14 - 1u);
+    uint32_t hundredths;
+    uint32_t tens;
 
-    (void)argc;
-    (void)argv;
+    lcd_print_uint((unsigned int)(value >> 14));
+    lcd_print_char('.');
+    hundredths = ((fraction << 6) + (fraction << 5) + (fraction << 2)) >> 14;
+
+    tens = 0;
+    while (hundredths >= 10u) {
+        hundredths -= 10u;
+        tens++;
+    }
+    lcd_print_uint((unsigned int)tens);
+    lcd_print_uint((unsigned int)hundredths);
+}
+
+int
+main(int argc, char *argv[]) {
+    uint32_t windows[3];
+    int lcd_mode = 0;
+
+    if (argc > 1 && strcmp(argv[1], "-d") == 0) {
+        lcd_mode = 1;
+    }
 
     /* The three windows first, and unconditionally.  Everything below this can
      * fail - the clock, the sweep - and none of that failures should cost the
@@ -177,6 +147,20 @@ int main(int argc, char *argv[])
         windows[1] = 0;
         windows[2] = 0;
     }
+
+    if (lcd_mode) {
+        lcd_init();
+        lcd_clear();
+        lcd_print("loadavg:");
+        lcd_set_cursor(0, 1);
+        print_q14_lcd(windows[0]);
+        lcd_print_char(' ');
+        print_q14_lcd(windows[1]);
+        lcd_print_char(' ');
+        print_q14_lcd(windows[2]);
+        return 0;
+    }
+
     printf("loadavg: ");
     print_q14(windows[0]);
     printf(" ");
@@ -185,41 +169,5 @@ int main(int argc, char *argv[])
     print_q14(windows[2]);
     printf("\n");
 
-    /* Every slot, the same sweep apps/top.c does.  A slot that cannot be read is
-     * a slot that has never run, and is left as zero rather than as whatever the
-     * buffer held before: a stale counter would be worse than no counter,
-     * because it would make this program's number wrong in a way nothing else
-     * would correct.
-     *
-     * The kernel slot is charged nothing of its own, so including it changes
-     * nothing; it is summed anyway rather than excluded by a test, so that
-     * whatever it is charged to, it is counted here. */
-    for (slot = 0; slot < MUZIX_PROC_INFO_SLOTS; slot++) {
-        if (sys_proctab(&info[slot], slot) != 0) {
-            continue;
-        }
-        charged += (uint32_t)info[slot].user_time +
-                   (uint32_t)info[slot].sys_time;
-    }
-
-    if (uptime(&seconds, 0) != 0 || seconds <= 0) {
-        printf("process-only CPU utilization unavailable: the clock did not answer at boot, or has been set\n");
-        printf("            back since - the same thing uptime reports\n");
-        return 1;
-    }
-
-    /* capacity is the boot interval in ticks, accumulated rather than
-     * multiplied: 32-bit multiply is __mullong.  seconds is an int32 of wall
-     * seconds and cannot be negative here. */
-    for (t = 0; t < (uint32_t)seconds; t++) {
-        capacity += MUZIX_PROC_TICK_HZ;
-    }
-    if (charged > capacity) {
-        charged = capacity;   /* a counter that wrapped, or one that never started at zero */
-    }
-
-    printf("process-only CPU utilization since boot: ");
-    print_q14(busy_fraction(charged, capacity));
-    printf("\n");
     return 0;
 }

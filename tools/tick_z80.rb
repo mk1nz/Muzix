@@ -88,6 +88,7 @@ fail('sdldz80 could not link tick.s with the harness', o) unless s.success?
 
 # ---- build the runner ----------------------------------------------------
 o, s = Open3.capture2e(CC, '-std=c99', '-O1', '-w',
+                       "-I#{File.join(ROOT, 'include')}",
                        "-I#{File.join(ROOT, 'emulator/z80')}",
                        File.join(ROOT, 'tools/tick_z80_run.c'),
                        File.join(ROOT, 'emulator/z80/z80.c'),

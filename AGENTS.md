@@ -256,7 +256,7 @@ architecture.
 | `mm/`         | mm_service (kernel-linked), mm_copy, mproc_model, mem_map, memory — the userspace MM server at slot 3 is `servers/mm/mm_server.c` |
 | `fs/`         | fs_service, volume, block_device, block_cache, directory, inode_table, allocator, file_io, path, superblock, tty_device, fs_clock — the userspace FS server at slot 2 is `servers/fs/fs_server.c`; ROM block reads are `kernel/rom_read.c`, not `fs/` |
 | `pm/`         | **pm_server.c** (userspace server at slot 4) |
-| `platform/zeta-v2/` | bank_io, **context_switch** (owns the copy primitives), kernel_bank_model, kernel_entry, rom_boot, rtc_ds1302, sdz80_runtime, syscall_entry, syscall_runtime, syscall_vector, trace, uart_io, una_boot, una_stage2, z80_io, **tick** |
+| `platform/zeta-v2/` | bank_io, **context_switch** (owns the copy primitives), kernel_bank_model, kernel_entry, rom_boot, rtc_ds1302, sdz80_runtime, spi_io, syscall_entry, syscall_runtime, syscall_vector, trace, uart_io, una_boot, una_stage2, w5100, z80_io, **tick** |
 | `lib/`        | libc, syscall, user_syscall, crt0, math, sdcc_runtime, tty_ioctl, proc_info, romfs_data, **server** |
 | `servers/`    | fs_server, mm_server, pm_server — userspace microkernel servers |
 | `tools/`      | ihx_to_bin.rb, make_minixfs.rb, add_exec_header.rb, bootloader, and the `check_*.rb` gates |
@@ -944,10 +944,12 @@ old test inventories or warning line numbers as current build results.
   cancel early on input, so the quit delay can approach the two-second refresh
   interval.
 
-  `SYS_WAIT` is a one-shot reap: it returns the pid of an exited child or `-1`
-  if none is available; it does not park or wait on a child-exit queue.
-  `shell/shell.c` calls it once and ignores the result, so callers must not
-  assume it blocks until the child exits.
+  `SYS_WAIT` is a one-shot reap at the syscall level: it returns the pid of an
+  exited child or `-1` if none is available; it does not park or wait on a
+  child-exit queue. `shell/shell.c` loops on `wait()` for foreground commands
+  until `ret > 0` (child reaped) or `ret == -1` (error); `wait() == 0` is an
+  input-wake placeholder and is not treated as completion. Bare `httpd` is
+  daemon-launched and returns control to the shell immediately.
 - `time()` converts DS1302 calendar fields to seconds since 2000-01-01.
   `uptime()` subtracts the RTC reading saved at boot. `UTIME` and `STIME` in
   `struct proc_info` are scheduler accounting counters in 120 Hz ticks, not
@@ -1024,9 +1026,11 @@ old test inventories or warning line numbers as current build results.
   (the internal numbers belong to the record-driven dispatcher), and the
   kernel-side handlers take `(uint16_t)arg` because the trap sign-extends the
   argument word (0x888A arrives as int32 0xFFFF888A). `ls` lists all 17
-  entries; the remaining FS stubs (`read`, `stat`, `seek`) mean `cat file` is
-  still not served, and the shell's one-shot `SYS_WAIT` still prints a prompt
-  mid-command-output — both pre-existing, neither part of that fix.
+  entries; `cat file` is served for ROM-backed files through the kernel ROM
+  interceptors (`open` via `muzix_rom_open_path()`, `read` via
+  `muzix_rom_read()`, `close` returns 0). Console output (`write(1, ...)`)
+  goes through the FS server's real TTY handler. The shell no longer prints a
+  prompt mid-command-output: it waits until the foreground child is reaped.
 
 
 Status section, not a wish list: each item below was found by the audit, was
@@ -1161,6 +1165,7 @@ is citing the test double.
 - `kernel/bootstrap.c` / `startup.c` — Boot initialization
 - `kernel/shell.c` — In-kernel shell (TTY-based, fallback if exec fails)
 - `kernel/rom_read.c` — ROM block device read (write-only bank-safe)
+- `kernel/socket_service.c` / `socket_service.h` — W5100 network syscall handlers
 - `kernel/libc_str.c` — Kernel string utilities
 - `kernel/msg_pool.c` / `kernel/proc_server.c` — source-only orphans: neither
   is in `KERNEL_C_MODULES`, so nothing links them. They call
@@ -1237,6 +1242,10 @@ is citing the test double.
 - `platform/zeta-v2/rtc_ds1302.c` / `rtc_ds1302.h` — the DS1302 on port `$70`,
   which is where `time()`, `uptime` and the load windows' sense of wall time
   come from
+- `platform/zeta-v2/spi_io.c` / `spi_io.h` — SPI bit-bang driver using PPI
+  Port C upper nibble (PC5=CLK, PC6=MOSI, PC7=CS) and Port A (PA0=MISO)
+- `platform/zeta-v2/w5100.c` / `w5100.h` — W5100 Ethernet controller driver
+  (register-level SPI protocol, TCP/UDP socket management)
 - `platform/zeta-v2/trace.c` / `trace.h` — the ring buffer the fallback
   shell's `trace` command dumps
 - `platform/zeta-v2/sdz80_runtime.s` — `___sdcc_call_hl`, `___sdcc_call_iy` and
@@ -1348,7 +1357,6 @@ caller cannot slip past review.
 - `docs/process-memory.md` — MINIX reference process model and Z80 bank abstraction
 - `docs/minix-muzix-audit.md` — Audit of MINIX vs Muzix feature parity
 - `PROJECT_STATUS.md` — Current implementation status and boot history
-- `../MINIX_MUZIX_COMPARISON.md` — Workspace-level comparison with MINIX
 - `Muzix/README.md` — Project overview and build instructions
 - `Muzix/BUILD_REPORT.md` — Build status report
 

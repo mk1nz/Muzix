@@ -25,8 +25,8 @@ static int test_write(struct muzix_block_device *device,
     return 0;
 }
 
-static int test_block_device(void)
-{
+static int
+test_block_device(void) {
     muzix_block_device_t device;
     muzix_fs_service_t fs;
     uint8_t buffer[MUZIX_FS_BLOCK_SIZE];
@@ -51,7 +51,7 @@ static int test_block_device(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_block_device();
 }

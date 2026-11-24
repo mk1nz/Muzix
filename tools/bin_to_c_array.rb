@@ -13,7 +13,7 @@ data = File.binread(input)
 
 File.open(output, "w") do |f|
   f.puts "/* Auto-generated from #{input} */"
-  f.puts "#include <stdint.h>"
+  f.puts "#include \"ztypes.h\""
   f.puts "const uint8_t #{symbol}[] = {"
   data.bytes.each_slice(16) do |row|
     f.puts "  " + row.map { |b| "0x%02x" % b }.join(", ") + ","

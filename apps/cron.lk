@@ -1,0 +1,14 @@
+-mjwx
+-i cron.ihx
+-b _CODE = 0x8000
+../lib/crt0.rel
+cron.rel
+../lib/math.rel
+../lib/sdcc_runtime.rel
+-k ../lib
+-l libc.lib
+-k ../lib
+-l syscall.lib
+../lib/user_syscall.rel
+../lib/server.rel
+-e

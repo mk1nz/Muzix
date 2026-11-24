@@ -21,10 +21,10 @@
 
 #include "bitmap_ops.h"
 
-#include <stdint.h>
+#include "ztypes.h"
 
-int16_t muzix_bitmap_alloc(void *map, uint16_t byte_count)
-{
+int16_t
+muzix_bitmap_alloc(void *map, uint16_t byte_count) {
     uint8_t *bytes = (uint8_t *)map;
     uint16_t index = 0;
     uint16_t byte_index;
@@ -47,8 +47,8 @@ int16_t muzix_bitmap_alloc(void *map, uint16_t byte_count)
     return -1;
 }
 
-void muzix_bitmap_release(void *map, uint16_t index)
-{
+void
+muzix_bitmap_release(void *map, uint16_t index) {
     uint8_t *bytes = (uint8_t *)map;
 
     if (!map) {

@@ -17,13 +17,13 @@ static uint16_t g_stack_min_sp = 0xFFFFu;
 static uint16_t g_stack_sp;
 static uint8_t g_stack_marked;
 
-static void uart_putc(uint8_t c)
-{
+static void
+uart_putc(uint8_t c) {
     muzix_zeta_uart_send(c, 0);
 }
 
-static void uart_write(const char *s)
-{
+static void
+uart_write(const char *s) {
     while (*s) {
         uart_putc((uint8_t)*s++);
     }
@@ -38,22 +38,22 @@ static uint8_t hex_digit(uint8_t nibble)
     return (uint8_t)hex[nibble & 0x0F];
 }
 
-static void uart_hex8(uint8_t v)
-{
+static void
+uart_hex8(uint8_t v) {
     uart_putc(hex_digit((uint8_t)(v >> 4)));
     uart_putc(hex_digit(v));
 }
 
-static void uart_hex32(uint32_t v)
-{
+static void
+uart_hex32(uint32_t v) {
     uart_hex8((uint8_t)(v >> 24));
     uart_hex8((uint8_t)(v >> 16));
     uart_hex8((uint8_t)(v >> 8));
     uart_hex8((uint8_t)v);
 }
 
-void muzix_trace_putc(uint8_t c)
-{
+void
+muzix_trace_putc(uint8_t c) {
     if (!MUZIX_TRACE_ENABLED) {
         return;
     }
@@ -74,8 +74,8 @@ void muzix_trace_putc(uint8_t c)
     muzix_zeta_uart_send(c, 0);
 }
 
-void muzix_trace_write(const char *s)
-{
+void
+muzix_trace_write(const char *s) {
     if (!s) {
         return;
     }
@@ -84,14 +84,14 @@ void muzix_trace_write(const char *s)
     }
 }
 
-void muzix_trace_hex8(uint8_t v)
-{
+void
+muzix_trace_hex8(uint8_t v) {
     muzix_trace_putc(hex_digit((uint8_t)(v >> 4)));
     muzix_trace_putc(hex_digit(v));
 }
 
-void muzix_trace_clear(void)
-{
+void
+muzix_trace_clear(void) {
     uint16_t i;
 
     for (i = 0; i < (uint16_t)MUZIX_TRACE_RING_SIZE; i++) {
@@ -102,21 +102,19 @@ void muzix_trace_clear(void)
     g_trace_started = 0;
 }
 
-uint32_t muzix_trace_total(void)
-{
+uint32_t
+muzix_trace_total(void) {
     return g_trace_total;
 }
 
-uint32_t muzix_trace_dropped(void)
-{
-    if (g_trace_total <= (uint32_t)MUZIX_TRACE_RING_SIZE) {
-        return 0;
-    }
+uint32_t
+muzix_trace_dropped(void) {
+    if (g_trace_total <= (uint32_t)MUZIX_TRACE_RING_SIZE) return 0;
     return g_trace_total - (uint32_t)MUZIX_TRACE_RING_SIZE;
 }
 
-void muzix_trace_stack_report(void)
-{
+void
+muzix_trace_stack_report(void) {
     uart_write("stack min SP ");
     uart_hex32(g_stack_min_sp);
     uart_write(", headroom ");
@@ -124,8 +122,8 @@ void muzix_trace_stack_report(void)
     uart_write("\r\n");
 }
 
-void muzix_trace_stack_mark(void)
-{
+void
+muzix_trace_stack_mark(void) {
     /* Named stack_pointer, not sp: the assembly below reads the Z80's SP
      * register, and a local called `sp` a few lines away means two different
      * things under the same name.  cppcheck resolved `add hl, sp` to this
@@ -178,8 +176,8 @@ void muzix_trace_stack_mark(void)
     g_stack_marked = 1;
 }
 
-void muzix_trace_dump(void)
-{
+void
+muzix_trace_dump(void) {
     uint32_t total = muzix_trace_total();
     uint32_t dropped = muzix_trace_dropped();
     uint16_t start;

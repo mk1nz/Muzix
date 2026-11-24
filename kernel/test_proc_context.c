@@ -1,6 +1,6 @@
 #include "proc_context.h"
 
-#include <string.h>
+#include "libc.h"
 
 #include "../platform/zeta-v2/bank_io.h"
 
@@ -113,8 +113,8 @@ static void set_map(process_map_t *map, uint8_t w1, uint8_t w2)
     map->pages[3] = MUZIX_ZETA_KERNEL_BANK_3;
 }
 
-static void setup(void)
-{
+static void
+setup(void) {
     muzix_proc_table_init(&g_table, &g_kmap);
     set_map(&g_maps[PARENT_SLOT], 0x30u, 0x32u);
     set_map(&g_maps[CHILD_SLOT], 0x31u, 0x33u);
@@ -427,8 +427,8 @@ static int refused_leaves_everything_alone(const uint8_t *banks, int slot)
     return 1;
 }
 
-static int test_a_refused_switch_leaves_the_previous_map_installed(void)
-{
+static int
+test_a_refused_switch_leaves_the_previous_map_installed(void) {
     uint8_t banks[4];
     int inactive_slot = 3;
 
@@ -489,8 +489,8 @@ static int test_a_refused_switch_leaves_the_previous_map_installed(void)
 
 /* ============================== case 6: the save's own refusals ============ */
 
-static int test_save_current_refuses_what_it_cannot_record(void)
-{
+static int
+test_save_current_refuses_what_it_cannot_record(void) {
     uint16_t pc = 0;
     uint16_t sp = 0;
     uint16_t ret = 0;
@@ -526,8 +526,8 @@ static int test_save_current_refuses_what_it_cannot_record(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     static int (*const cases[])(void) = {
         test_a_switch_installs_the_target_and_publishes_its_frame,
         test_current_follows_the_switch,

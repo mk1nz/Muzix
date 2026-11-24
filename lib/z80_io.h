@@ -1,7 +1,7 @@
 #ifndef MUZIX_Z80_IO_H
 #define MUZIX_Z80_IO_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 /* Userspace I/O port access for Z80 diagnostics.
  *
@@ -18,6 +18,7 @@
  */
 
 void z80_outb(uint8_t port, uint8_t value);
+
 uint8_t z80_inb(uint8_t port);
 
 #endif /* MUZIX_Z80_IO_H */

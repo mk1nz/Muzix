@@ -1,6 +1,6 @@
 #include "block_cache.h"
 
-#include <string.h>
+#include "libc.h"
 #include "../platform/zeta-v2/trace.h"
 
 void muzix_fs_cache_init(muzix_fs_block_cache_t *cache,
@@ -131,8 +131,8 @@ int muzix_fs_cache_mark_dirty(muzix_fs_block_cache_t *cache,
     return -1;
 }
 
-int muzix_fs_cache_flush(muzix_fs_block_cache_t *cache)
-{
+int
+muzix_fs_cache_flush(muzix_fs_block_cache_t *cache) {
     uint8_t slot;
 
     if (!cache || !cache->device) {

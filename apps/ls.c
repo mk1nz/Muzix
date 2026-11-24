@@ -187,8 +187,8 @@ static int is_dot(const char *name)
     return name[1] == '.' && name[2] == 0;
 }
 
-static void usage(void)
-{
+static void
+usage(void) {
     puts("usage: ls [-l] [-1] [-r] [directory]");
     puts("");
     puts("  -l   long format: mode, link count, size, name");
@@ -257,8 +257,8 @@ static void show(const char *dir, const struct dirent *entry, int long_fmt)
     puts(entry->name);
 }
 
-int main(int argc, const char *argv[])
-{
+int
+main(int argc, const char *argv[]) {
     char resolved[LS_PATH_MAX] = ".";
     const char *path = ".";
     int long_fmt = 0;

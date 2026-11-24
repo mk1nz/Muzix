@@ -1,7 +1,7 @@
 #ifndef MUZIX_BLOCK_CACHE_H
 #define MUZIX_BLOCK_CACHE_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "block_device.h"
 

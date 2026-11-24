@@ -1,8 +1,7 @@
 #ifndef MUZIX_SYSTEM_SERVICE_H
 #define MUZIX_SYSTEM_SERVICE_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../include/muzix_message.h"
 #include "../mm/mm_service.h"

@@ -1,9 +1,12 @@
+/* host-test-not-portable: this module models MINIX-style segment mapping for
+ * the Z80 target and uses Z80-specific bank/page arithmetic that has no host
+ * equivalent. */
 #include "minix_adapter.h"
 
-#include <string.h>
+#include "libc.h"
 
-static uint8_t muzix_segment_page(const minix_mem_map_t *seg, int region)
-{
+static uint8_t
+muzix_segment_page(const minix_mem_map_t *seg, int region) {
     uint16_t base;
     if (!seg) {
         return 0;
@@ -41,8 +44,8 @@ uint16_t muzix_umap_segment(const minix_proc_map_t *proc,
     return physical_address > 0xffffu ? 0 : (uint16_t)physical_address;
 }
 
-void muzix_minix_to_process_map(const minix_proc_map_t *proc, process_map_t *out)
-{
+void
+muzix_minix_to_process_map(const minix_proc_map_t *proc, process_map_t *out) {
     int i;
     process_map_t tmp = {{0, 0, 0, 0}};
 

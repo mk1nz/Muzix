@@ -1,7 +1,7 @@
 #include "server.h"
 #include "syscall.h"
 #include "proc_info.h"
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_PROC_TABLE_MAX 8
 

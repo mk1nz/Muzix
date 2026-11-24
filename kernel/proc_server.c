@@ -1,12 +1,12 @@
 #include "proc_server.h"
 
-#include <string.h>
+#include "libc.h"
 
 #include "proc_table.h"
 
-void muzix_proc_server_init(muzix_proc_server_t *server,
-                            muzix_kernel_proc_table_t *proc_table)
-{
+void
+muzix_proc_server_init(muzix_proc_server_t *server,
+                       muzix_kernel_proc_table_t *proc_table) {
     if (!server) {
         return;
     }
@@ -15,8 +15,8 @@ void muzix_proc_server_init(muzix_proc_server_t *server,
     server->active = 1;
 }
 
-static int find_slot_by_pid(muzix_kernel_proc_table_t *table, uint8_t pid)
-{
+static int
+find_slot_by_pid(muzix_kernel_proc_table_t *table, uint8_t pid) {
     if (!table || pid == 0) {
         return -1;
     }
@@ -28,9 +28,9 @@ static int find_slot_by_pid(muzix_kernel_proc_table_t *table, uint8_t pid)
     return -1;
 }
 
-int32_t muzix_proc_server_handle(muzix_proc_server_t *server,
-                                 const muzix_proc_server_msg_t *msg)
-{
+int32_t
+muzix_proc_server_handle(muzix_proc_server_t *server,
+                         const muzix_proc_server_msg_t *msg) {
     int32_t result = -1;
 
     if (!server || !msg || !server->active || !server->proc_table) {
@@ -78,8 +78,8 @@ int32_t muzix_proc_server_handle(muzix_proc_server_t *server,
     return result;
 }
 
-void muzix_proc_server_loop(muzix_proc_server_t *server)
-{
+void
+muzix_proc_server_loop(muzix_proc_server_t *server) {
     while (server && server->active) {
         /* In userspace mode, this would:
          * 1. Receive message from kernel via syscall/IPC

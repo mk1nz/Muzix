@@ -1,10 +1,10 @@
 #ifndef MUZIX_FS_TYPES_H
 #define MUZIX_FS_TYPES_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #define MUZIX_FS_MAGIC 0x137fu
-#define MUZIX_FS_MAX_INODES 32u
+#define MUZIX_FS_MAX_INODES 48u
 #define MUZIX_FS_DIRECT_ZONES 7u
 #define MUZIX_FS_MODE_CHAR 0x2000u
 #define MUZIX_FS_MODE_DIR 0x4000u

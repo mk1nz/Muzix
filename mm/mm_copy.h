@@ -1,8 +1,7 @@
 #ifndef MUZIX_MM_COPY_H
 #define MUZIX_MM_COPY_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "mm_service.h"
 #include "mproc_model.h"

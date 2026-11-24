@@ -1,6 +1,6 @@
 #include "bank_model.h"
 
-#include <string.h>
+#include "libc.h"
 
 static uint8_t zeta_ram_storage[ZETA_RAM_STORAGE_SIZE];
 
@@ -38,8 +38,8 @@ void zeta_refresh_visible(zeta_state_t *state)
     (void)state;
 }
 
-void zeta_init(zeta_state_t *state)
-{
+void
+zeta_init(zeta_state_t *state) {
     if (!state) {
         return;
     }
@@ -51,8 +51,8 @@ void zeta_init(zeta_state_t *state)
     zeta_enable_paging(state, true);
 }
 
-void zeta_enable_paging(zeta_state_t *state, bool enable)
-{
+void
+zeta_enable_paging(zeta_state_t *state, bool enable) {
     if (!state) {
         return;
     }
@@ -62,8 +62,8 @@ void zeta_enable_paging(zeta_state_t *state, bool enable)
     }
 }
 
-void zeta_set_bank(zeta_state_t *state, int region, uint8_t page)
-{
+void
+zeta_set_bank(zeta_state_t *state, int region, uint8_t page) {
     if (!state || region < 0 || region >= (int)ZETA_REGIONS) {
         return;
     }
@@ -72,8 +72,8 @@ void zeta_set_bank(zeta_state_t *state, int region, uint8_t page)
     zeta_refresh_visible(state);
 }
 
-void zeta_map_kernel(zeta_state_t *state, uint8_t p0, uint8_t p1, uint8_t p2, uint8_t p3)
-{
+void
+zeta_map_kernel(zeta_state_t *state, uint8_t p0, uint8_t p1, uint8_t p2, uint8_t p3) {
     if (!state) {
         return;
     }
@@ -84,8 +84,8 @@ void zeta_map_kernel(zeta_state_t *state, uint8_t p0, uint8_t p1, uint8_t p2, ui
     zeta_refresh_visible(state);
 }
 
-void zeta_map_process(zeta_state_t *state, const process_map_t *map)
-{
+void
+zeta_map_process(zeta_state_t *state, const process_map_t *map) {
     if (!state || !map) {
         return;
     }
@@ -96,8 +96,8 @@ void zeta_map_process(zeta_state_t *state, const process_map_t *map)
     zeta_refresh_visible(state);
 }
 
-void zeta_save_kernel_map(zeta_state_t *state, process_map_t *out)
-{
+void
+zeta_save_kernel_map(zeta_state_t *state, process_map_t *out) {
     if (!state || !out) {
         return;
     }
@@ -107,8 +107,8 @@ void zeta_save_kernel_map(zeta_state_t *state, process_map_t *out)
     }
 }
 
-void zeta_restore_map(zeta_state_t *state, const process_map_t *saved)
-{
+void
+zeta_restore_map(zeta_state_t *state, const process_map_t *saved) {
     if (!state || !saved) {
         return;
     }
@@ -116,8 +116,8 @@ void zeta_restore_map(zeta_state_t *state, const process_map_t *saved)
     zeta_map_process(state, saved);
 }
 
-uint8_t zeta_read_visible(zeta_state_t *state, uint16_t addr)
-{
+uint8_t
+zeta_read_visible(zeta_state_t *state, uint16_t addr) {
     uint8_t *page;
 
     if (!state || !state->paging_enabled || addr >= ZETA_VISIBLE_SIZE) {
@@ -133,8 +133,8 @@ uint8_t zeta_read_visible(zeta_state_t *state, uint16_t addr)
     return page[addr & (ZETA_BANK_SIZE - 1)];
 }
 
-void zeta_write_visible(zeta_state_t *state, uint16_t addr, uint8_t value)
-{
+void
+zeta_write_visible(zeta_state_t *state, uint16_t addr, uint8_t value) {
     uint8_t *page;
 
     if (!state || !state->paging_enabled || addr >= ZETA_VISIBLE_SIZE) {

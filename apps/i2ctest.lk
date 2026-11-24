@@ -1,0 +1,17 @@
+-mjwx
+-i i2ctest.ihx
+-b _CODE = 0x8000
+; _DATA is placed immediately after _CODE by the linker default
+../lib/crt0.rel
+i2ctest.rel
+../lib/math.rel
+../lib/sdcc_runtime.rel
+-k ../lib
+-l libc.lib
+-k ../lib
+-l syscall.lib
+../lib/user_syscall.rel
+../lib/z80_io.rel
+../lib/i2c.rel
+../lib/lcd.rel
+-e

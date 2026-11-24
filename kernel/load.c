@@ -78,6 +78,10 @@
 
 #include "load.h"
 
+extern uint8_t muzix_tick_get_cpu_mhz_x10(void);
+
+#include "../platform/zeta-v2/tick.h"
+
 /* Q14: 1.0 == 16384. */
 #define LOAD_SCALE 16384u
 
@@ -98,8 +102,68 @@ static uint32_t g_load[3];
 static uint16_t g_load_tick;
 static uint32_t g_load_halted;
 static uint16_t g_load_boot_tick;
-static uint8_t g_load_counts_per_tick;
 static uint8_t  g_load_ready;
+
+/* Sub-second decay, applied to every actual elapsed interval so that a change
+ * in the busy fraction between two sub-second samples is not lost.
+ *
+ * The EMA over a span of `whole` seconds and `frac` ticks (0..119) is
+ *
+ *   L(t+dt) = L(t) * exp(-dt/tau) + B * (1 - exp(-dt/tau))
+ *
+ * with dt = whole + frac/120.  exp(-dt/tau) = f^whole * f^(frac/120), where
+ * f = g_load_factor[i] = exp(-1/tau) per second.  f^(frac/120) is 1 - frac/(120*tau)
+ * to first order, and the coefficient frac/(120*tau) is exact to the Q14 LSB
+ * for frac >= 12 ticks (100 ms); below that it rounds to 1 LSB.
+ *
+ * g_load_frac_k3[i] = round(2^22 / (120*tau[i])) << 6, so that
+ * muzix_load_mul(frac, g_load_frac_k3[i]) = (frac * K) >> 8 = frac * 16384 / (120*tau).
+ * For the three windows: 583, 117, 39 (before the << 6), i.e. 37312, 7488, 2496. */
+static const uint16_t g_load_frac_k3[3] = { 37312u, 7488u, 2496u };
+
+/* HALT measurement overhead in CTC0/CTC1 reference counts (one count =
+ * 1/921600 s).  Computed in muzix_load_init() from the detected CPU frequency
+ * and the fixed instruction paths in muzix_halt_begin() and the ISRs.
+ *
+ * START_OVERHEAD_T: T-states from the start-phase timestamp (start of first
+ *   IN in muzix_halt_begin) to the HALT instruction, including the first IN
+ *   itself (the timestamp is at its start) and the HALT.
+ *   Path: in CTC0(12) + ld b(4) + in CTC1(12) + ld c(4) + in CTC0(12) +
+ *   cp b(4) + jr z taken(12) + ld a,#29(7) + sub c(4) + ld d(4) +
+ *   ld a,#255(7) + sub b(4) + ld e(4) + ld hl,#wake_valid(10) +
+ *   ld (hl),#0(10) + ei(4) + halt(4) = 118 T (coherent snapshot path)
+ * WAKE_OVERHEAD_T: T-states from interrupt entry to the wake-phase timestamp
+ *   (first IN in the ISR), including IM2 dispatch.
+ *   IM2 acknowledge(19) + CALL(17) + ex af,af'(4) + exx(4) = 44 T
+ *   Same for both tick and UART ISRs.
+ */
+#define START_OVERHEAD_T 118u
+#define WAKE_OVERHEAD_T  44u
+
+/* CTC0/CTC1 single-snapshot error bound:
+ *
+ * The phase is read as c0a → c1 → c0b over 32 CPU T-states.  CTC0 changes at
+ * UART_CLK/2 = 921600 Hz, independent of CPU clock, so it decrements D =
+ * 32 * 921600 / CPU_Hz times between the two CTC0 reads.  D is 15 at 2 MHz,
+ * 8 at 4 MHz, 1 or 2 at 20 MHz (never 0: 32 CPU cycles > CTC0 period).
+ *
+ * If CTC0 wraps between c0a and c0b but CTC1 has not yet seen the ZC/TO
+ * when c1 is read, the computed phase lags the true phase at the first IN
+ * by 256 - D.  D >= 1, so the strict upper bound is 255 phase units
+ * (3.3% of one 7680-count tick).  If CTC1 saw the wrap, the error is D
+ * (<= 20 units).  The error is bounded, mostly positive, and averaged out
+ * by the EMA over multiple samples. */
+
+static uint16_t g_halt_overhead_counts;
+
+/* Forward declaration: defined below at overhead_counts(). */
+static uint16_t overhead_counts(uint8_t t, uint8_t mhz_x10);
+
+/* Return the computed halt overhead in CTC0/CTC1 reference counts. */
+uint16_t
+muzix_load_halt_overhead_counts(void) {
+    return g_halt_overhead_counts;
+}
 
 /* Record `counts` of the time the processor has just spent stopped.
  *
@@ -163,8 +227,8 @@ static uint8_t  g_load_ready;
  * arithmetic below converts ticks to counts by shifting rather than multiplying.
  * At the board's 4 MHz CPU clock, 61440 cycles per tick / 256 cycles per CTC3
  * count is 130.208 counts per tick; load_span_counts() uses the nearest integer. */
-void muzix_load_note_halted(uint16_t counts)
-{
+void
+muzix_load_note_halted(uint16_t counts) {
     g_load_halted += counts;
 }
 
@@ -231,8 +295,8 @@ void muzix_load_note_halted(uint16_t counts)
  * keeps its low 16; that is the documented behaviour of the return type rather
  * than a second defect, and kernel/test_load.c asserts it exactly that way.
  */
-uint16_t muzix_load_mul(uint16_t a, uint16_t b)
-{
+uint16_t
+muzix_load_mul(uint16_t a, uint16_t b) {
     uint8_t al = (uint8_t)(a & 0xFFu);
     uint8_t ah = (uint8_t)(a >> 8);
     uint8_t bl = (uint8_t)(b & 0xFFu);
@@ -259,47 +323,28 @@ uint16_t muzix_load_mul(uint16_t a, uint16_t b)
 
 /* (spent << 14) / capacity, by subtraction.  The caller clamps, so the quotient
  * is at most LOAD_SCALE and the loop is bounded. */
-static uint32_t load_div(uint32_t spent, uint32_t capacity)
-{
-    uint32_t scaled = spent << 14;
-    uint32_t whole = 0;
+static uint32_t
+load_div(uint32_t spent, uint32_t cycles) {
+    /* cycles = span * 7680 fits in uint32_t (max 65535 * 7680 = 503,316,480).
+     * spent <= cycles, so spent * LOAD_Q14_SCALE fits in uint64_t.
+     */
+    if (cycles == 0) return LOAD_Q14_SCALE;
+    if (spent >= cycles) return LOAD_Q14_SCALE;
+    uint32_t result = 0;
+    uint32_t remainder = spent;
+    int i;
 
-    if (capacity == 0) {
-        return 0;
+    for (i = 0; i < 14; i++) {
+        remainder = remainder * 2;
+        if (remainder >= cycles) {
+            result = (result << 1) | 1u;
+            remainder -= cycles;
+        } else {
+            result = result << 1;
+        }
     }
-    while (scaled >= capacity) {
-        scaled -= capacity;
-        whole++;
-    }
-    return whole;
+    return result;
 }
-
-/* Ticks to whole seconds, rounded to nearest, by subtraction.
- *
- * NOT a division.  LOAD_TICK_HZ is `120u`, and SDCC widens `unsigned int` to 32
- * bits: `span + LOAD_TICK_HZ/2` and the `/ LOAD_TICK_HZ` then became one
- * `__divulong` call, which the kernel cannot resolve - KERNEL_LINK_ORDER links
- * .rel files only, never a .lib.  The link said
- * `Undefined Global '__divulong' referenced by module 'load'` and the second
- * pass in the build/kernel.map rule is not allowed to fail quietly, so `make`
- * stopped with no further explanation.  Nothing in the host tests sees it,
- * because gcc inlines the divide and the host runner has all of libc.
- *
- * Subtraction costs about 25 bytes where a 16-bit helper would cost its 34 plus
- * the object to link, and the loop runs at most 546 times - roughly 1.5 ms on a
- * 4 MHz Z80, once per read, on a caller that asks every few seconds. */
-static uint16_t load_seconds(uint16_t ticks)
-{
-    uint16_t rest = (uint16_t)(ticks + (uint16_t)(LOAD_TICK_HZ / 2u));
-    uint16_t seconds = 0;
-
-    while (rest >= LOAD_TICK_HZ) {
-        rest = (uint16_t)(rest - LOAD_TICK_HZ);
-        seconds++;
-    }
-    return seconds;
-}
-
 /* (spent << 14) / capacity, for arguments too large to scale.
  *
  * load_div() computes the quotient by scaling the numerator left by 14 and
@@ -322,8 +367,8 @@ static uint16_t load_seconds(uint16_t ticks)
  * multiply it.  load_div() itself is unchanged and is still what the window
  * arithmetic uses, where the arguments are Q14 fractions and 2^18 is never
  * approached. */
-static uint32_t load_ratio(uint32_t spent, uint32_t capacity)
-{
+static uint32_t
+load_ratio(uint32_t spent, uint32_t capacity) {
     /* 0x3FFFF, not 0x3FFFFF.  The limit is where `spent << 14` still fits in 32
      * bits, and 2^32 / 2^14 is 2^18 - so the threshold is 18 bits of mask, and
      * writing seven hex digits here puts it four bits too high, which lets
@@ -339,25 +384,53 @@ static uint32_t load_ratio(uint32_t spent, uint32_t capacity)
 
 /* The interval expressed in calibrated CTC3 counts. Multiply using shift-and-add
  * to avoid an SDCC 32-bit multiply helper that the kernel cannot link. */
-static uint32_t load_span_counts(uint16_t span)
-{
-    uint32_t value = (uint32_t)span;
-    uint32_t capacity = 0;
-    uint8_t rate = (uint8_t)g_load_counts_per_tick;
-
-    while (rate != 0) {
-        if ((rate & 1u) != 0) {
-            capacity += value;
-        }
-        rate = (uint8_t)(rate >> 1);
-        value += value;
-    }
-    return capacity;
+static uint32_t
+load_span_counts(uint16_t span) {
+    /* span * 7680 = span * (4096 + 2048 + 1024 + 512)
+     * All constant shifts on uint32_t, no multiply helper needed. */
+    uint32_t s = (uint32_t)span;
+    return (s << 12) + (s << 11) + (s << 10) + (s << 9);
 }
 
-void muzix_load_init(uint16_t now_ticks, uint16_t counts_per_tick)
-{
+/* Compute ceil(T * 921600 / CPU_Hz) in CTC0/CTC1 reference counts,
+ * without any 32-bit multiply or divide helper.
+ *
+ * T is the instruction path length in T-states (<= 118).
+ * CPU_Hz = mhz_x10 * 100000 (2 MHz .. 20 MHz).
+ * Result fits in uint16_t (<= 58 at 2 MHz).
+ *
+ * num = T * 921600 computed as shift-and-add on uint32_t:
+ *   T * 9216 = (T << 13) + (T << 10)      [T * 8192 + T * 1024]
+ *   T * 921600 = (T * 9216) * 100 = ((T * 9216) << 6) + ((T * 9216) << 5) + ((T * 9216) << 2)
+ * denom = CPU_Hz = mhz_x10 * 100000 computed as shift-and-add:
+ *   mhz_x10 * 1000 = (mhz_x10 << 10) - ((mhz_x10 << 4) + (mhz_x10 << 3))
+ *   CPU_Hz = (mhz_x10 * 1000) * 100 = << 6 + << 5 + << 2
+ * Ceil division by repeated subtraction (bounded: result <= 58). */
+static uint16_t
+overhead_counts(uint8_t t, uint8_t mhz_x10) {
+    uint32_t t32 = (uint32_t)t;
+    uint32_t num = (t32 << 13) + (t32 << 10);          /* T * 9216 */
+    num = (num << 6) + (num << 5) + (num << 2);        /* T * 921600 */
+
+    uint32_t mx32 = (uint32_t)mhz_x10;
+    uint32_t mx1000 = (mx32 << 10) - ((mx32 << 4) + (mx32 << 3));  /* mhz_x10 * 1000 */
+    uint32_t denom = (mx1000 << 6) + (mx1000 << 5) + (mx1000 << 2); /* mhz_x10 * 100000 */
+
+    /* Ceil: (num + denom - 1) / denom by repeated subtraction. */
+    num += denom - 1u;
+    uint16_t counts = 0;
+    while (num >= denom) {
+        num -= denom;
+        counts++;
+    }
+    return counts;
+}
+
+void
+muzix_load_init(uint16_t now_ticks, uint16_t counts_per_tick) {
     int i;
+
+    (void)counts_per_tick; /* Fixed at 7680 counts per tick (CTC0/CTC1 cascade) */
 
     for (i = 0; i < 3; i++) {
         g_load[i] = 0;
@@ -368,32 +441,39 @@ void muzix_load_init(uint16_t now_ticks, uint16_t counts_per_tick)
      * is reported as fully busy.  That is what the first reading of 1.00 is. */
     g_load_halted = 0;
     g_load_boot_tick = now_ticks;
-    g_load_counts_per_tick = (uint8_t)counts_per_tick;
     g_load_ready = 0;
+
+    /* Compute halt overhead in CTC0/CTC1 reference counts from the detected
+     * CPU frequency.  Overhead in counts = ceil(T * 921600 / CPU_Hz) where
+     * CPU_Hz = mhz_x10 * 100000.  T is the fixed instruction path length
+     * (START_OVERHEAD_T from phase-timestamp to HALT, WAKE_OVERHEAD_T from
+     * ISR entry to wake timestamp).
+     *
+     * All arithmetic uses shifts and repeated subtraction only - no 32-bit
+     * multiply or divide helpers, which the kernel cannot link.  Results are
+     * small (<= 58 counts at 2 MHz), so the subtraction loop is bounded. */
+    {
+    uint8_t mhz_x10 = muzix_tick_get_cpu_mhz_x10();
+    g_halt_overhead_counts = (uint16_t)(
+        overhead_counts(START_OVERHEAD_T, mhz_x10) +
+        overhead_counts(WAKE_OVERHEAD_T,  mhz_x10));
+    }
 }
 
-void muzix_load_reset(void)
-{
-    g_load_ready = 0;
-}
-
-void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks)
-{
+void
+muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks) {
     uint32_t span;
     uint32_t capacity;
     uint32_t halted;
     uint32_t busy;
     uint32_t d[3];
     uint32_t f[3];
-    uint16_t exp;
+    uint16_t rest;
+    uint16_t whole;
+    uint16_t frac;
     int i;
 
-    if (!table) {
-        return;
-    }
-    if (g_load_counts_per_tick == 0) {
-        return;
-    }
+    if (!table) return;
     /* The table is still required - it is what makes this routine reachable from a
      * test with a clock the test controls - but the figure no longer comes out of
      * it.  What the processor did is measured from the CTC cycle counter now. */
@@ -414,9 +494,7 @@ void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks)
          * 0.14, because the comment here claimed a seeding that the code below
          * was not doing. */
         span = (uint16_t)(now_ticks - g_load_boot_tick);
-        if (span == 0) {
-            return;
-        }
+        if (span == 0) return;
         capacity = load_span_counts(span);
         if (halted > capacity) {
             halted = capacity;
@@ -435,9 +513,7 @@ void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks)
     }
     span = (uint16_t)(now_ticks - g_load_tick);
 
-    if (span == 0) {
-        return;
-    }
+    if (span == 0) return;
 
     /* Occupancy: the interval's own length minus the part of it the processor was
      * stopped for.  That is the whole of it, and it is a partition - every cycle
@@ -465,23 +541,48 @@ void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks)
      * the windows decay to nothing in a couple of seconds - the 15-minute window
      * reaches its final value inside 30 seconds.  kernel/test_load.c case 6 is
      * what found it: the run converged to 8192 after one step and all three
-     * windows came out indistinguishable. */
-    exp = load_seconds((uint16_t)span);
+     * windows came out indistinguishable.
+     *
+     * Split the span into whole seconds and a sub-second remainder.  The
+     * whole-second part uses g_load_factor[i] exactly; the remainder is applied
+     * below with g_load_frac_k3[i], so a span that changes the busy fraction
+     * between sub-second samples still contributes its own B. */
+    rest = (uint16_t)span;
+    whole = 0;
+    while (rest >= LOAD_TICK_HZ) {
+        rest = (uint16_t)(rest - LOAD_TICK_HZ);
+        whole++;
+    }
+    frac = rest;
     for (i = 0; i < 3; i++) {
         d[i] = LOAD_SCALE;
         f[i] = g_load_factor[i];
     }
-    while (exp != 0) {
-        if ((exp & 1u) != 0) {
+    while (whole != 0) {
+        if ((whole & 1u) != 0) {
             for (i = 0; i < 3; i++) {
                 d[i] = muzix_load_mul((uint16_t)d[i], (uint16_t)f[i]);
             }
         }
-        exp = (uint16_t)(exp >> 1);
-        if (exp != 0) {              /* the last squaring feeds nothing */
+        whole = (uint16_t)(whole >> 1);
+        if (whole != 0) {              /* the last squaring feeds nothing */
             for (i = 0; i < 3; i++) {
                 f[i] = muzix_load_mul((uint16_t)f[i], (uint16_t)f[i]);
             }
+        }
+    }
+
+    /* Sub-second decay: d *= exp(-frac/(120*tau)) ≈ 1 - frac/(120*tau).
+     * This is what makes a 250 ms busy + 750 ms idle pair different from a
+     * single 1 s sample: the busy 250 ms contributes its own B, then the idle
+     * 750 ms decays it, rather than the last sample's B being applied to the
+     * whole second. */
+    if (frac != 0u) {
+        for (i = 0; i < 3; i++) {
+            uint16_t decay = muzix_load_mul((uint16_t)frac, g_load_frac_k3[i]);
+            uint16_t df = (uint16_t)(LOAD_SCALE - decay);
+
+            d[i] = muzix_load_mul((uint16_t)d[i], df);
         }
     }
 
@@ -504,7 +605,7 @@ void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks)
     for (i = 0; i < 3; i++) {
         uint32_t keep = muzix_load_mul((uint16_t)g_load[i], (uint16_t)d[i]);
         uint32_t take = muzix_load_mul((uint16_t)busy,
-                                 (uint16_t)(LOAD_SCALE - d[i]));
+                                  (uint16_t)(LOAD_SCALE - d[i]));
 
         g_load[i] = keep + take;
     }
@@ -512,10 +613,16 @@ void muzix_load_sample(muzix_kernel_proc_table_t *table, uint16_t now_ticks)
     g_load_tick = now_ticks;
 }
 
-uint32_t muzix_load_window(int index)
-{
-    if (index < 0 || index > 2) {
-        return 0;
-    }
+uint32_t
+muzix_load_window(int index) {
+    if (index < 0 || index > 2) return 0;
     return g_load[index];
+}
+
+/* The fractional-decay coefficient for a window, exposed so the host test can
+ * derive round(2^22 / (120*tau)) << 6 independently and compare. */
+uint16_t
+muzix_load_frac_coef(int index) {
+    if (index < 0 || index > 2) return 0;
+    return g_load_frac_k3[index];
 }

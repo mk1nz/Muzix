@@ -11,7 +11,7 @@
  */
 
 #include "ls_time.h"
-#include <string.h>
+#include "libc.h"
 
 void format_epoch(uint32_t epoch, char *buf) {
     static const uint8_t days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};

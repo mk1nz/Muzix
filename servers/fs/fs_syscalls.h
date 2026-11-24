@@ -1,8 +1,7 @@
 #ifndef MUZIX_FS_SYSCALLS_H
 #define MUZIX_FS_SYSCALLS_H
 
-#include <stdint.h>
-#include <stddef.h>
+#include "ztypes.h"
 
 /* Syscall numbers for FS server userspace operations */
 #define SYS_OPEN      10

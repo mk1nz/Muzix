@@ -1,7 +1,7 @@
 #ifndef MUZIX_PROC_CONTEXT_H
 #define MUZIX_PROC_CONTEXT_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../kernel/proc_table.h"
 

@@ -14,12 +14,12 @@
  */
 #include "bank_model.h"
 
-#include <assert.h>
-#include <stdio.h>
-#include <string.h>
+#include "libc.h"
+#include "libc.h"
+#include "libc.h"
 
-static void test_bank_mapping(void)
-{
+static void
+test_bank_mapping(void) {
     zeta_state_t state;
     zeta_init(&state);
 
@@ -38,8 +38,8 @@ static void test_bank_mapping(void)
     assert(zeta_read_visible(&state, 0x8000) == 0xCC);
 }
 
-static void test_process_isolation(void)
-{
+static void
+test_process_isolation(void) {
     zeta_state_t state;
     process_map_t proc_a = { {1, 2, 3, 3} };
     process_map_t proc_b = { {2, 2, 3, 3} };
@@ -60,8 +60,8 @@ static void test_process_isolation(void)
     assert(state.ram[4 * ZETA_BANK_SIZE + 0x1234] == 0x5A);
 }
 
-static void test_copyin_copyout(void)
-{
+static void
+test_copyin_copyout(void) {
     zeta_state_t state;
     process_map_t proc_a = { {1, 2, 3, 3} };
     uint8_t buffer[16];
@@ -87,8 +87,8 @@ static void test_copyin_copyout(void)
     }
 }
 
-int main(void)
-{
+int
+main(void) {
     test_bank_mapping();
     test_process_isolation();
     test_copyin_copyout();

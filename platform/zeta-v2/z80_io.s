@@ -1,6 +1,7 @@
 .module muzix_z80_io
 
 .globl _z80_outb
+.globl _z80_inb
 .globl _z80_halt
 .globl _z80_idle_halt
 .globl _z80_capture_sp
@@ -11,13 +12,25 @@
 .area _CODE
 
 ; void z80_outb(uint8_t port, uint8_t value)
-; SDCC extern convention: param1 (port) in A, param2 (value) in HL (L)
+; SDCC -mz80 uses sdcccall(1): param1 (port) in A, param2 (value) in L
 _z80_outb:
     push af
-    ld c,a        ; port from A
-    ld a,l        ; value from L (low byte of HL)
-    out (c),a
+    ld c, a         ; port from A
+    ld b, #0        ; B = 0: port = {0, C} for 8-bit ports
+    ld a, l         ; value from L
+    out (c), a
     pop af
+    ret
+
+; uint8_t z80_inb(uint8_t port)
+; SDCC -mz80: param1 (port) in A
+_z80_inb:
+    push bc
+    ld c, a         ; port from A
+    ld b, #0        ; B = 0: port = {0, C} for 8-bit ports
+    in a, (c)
+    ld l, a         ; return value in L (SDCC 8-bit return in A, returned in HL)
+    pop bc
     ret
 
 ; There is deliberately no z80_inb() here.  The Zeta V2 bank select registers
@@ -50,9 +63,10 @@ _z80_halt:
 ; RET. This closes the race where an interrupt could be handled after a C call
 ; to z80_enable_interrupts() returned but before a separate call to z80_halt().
 _z80_idle_halt:
-    ei
-    halt
-    ret
+    di                      ; disable maskable interrupts first
+    ei                      ; enable maskable interrupts (effective after next instruction)
+    halt                    ; CPU stops until next enabled interrupt
+    ret                     ; returns after ISR's reti
 
 ; void z80_enable_interrupts(void)
 ; void z80_disable_interrupts(void)
@@ -129,8 +143,28 @@ _z80_capture_sp:
 ; computed both on every syscall and discarded them; a parked process is the case
 ; that has to keep them.
 _z80_syscall_user_sp:
-    ld      hl, #0xFFFC
+    ld      hl, #0xFFFE
     ld      e, (hl)
     inc     hl                  ; asxxxx has no 1(hl)
     ld      d, (hl)
     ret
+
+; void spi_delay_cycles(uint8_t count)
+; count in A (sdcccall(1) convention for single 8-bit parameter).
+;
+; Exact timing (T-states), count >= 1: identical to _i2c_delay_cycles.
+;   ld b, a           = 4
+;   dec b             = 4
+;   jr nz, loop       = 7 (not taken, last iteration) / 12 (taken)
+;   ret               = 10
+;
+; Total: 16 * count + 9 T-states
+
+.globl _spi_delay_cycles
+
+_spi_delay_cycles:
+    ld      b, a          ; count -> B  (4 T)
+00102$:
+    dec     b             ; 4 T  (one iteration of delay work)
+    jr      nz, 00102$    ; 7 T exit / 12 T continue
+    ret                   ; 10 T

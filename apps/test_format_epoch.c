@@ -10,8 +10,8 @@
  * linker-closure test runner (apps/ is now in SOURCE_DIRS).
  */
 #include "ls_time.h"
-#include <stdint.h>
-#include <string.h>
+#include "ztypes.h"
+#include "libc.h"
 
 /*
  * A check table.  Epochs are seconds since 2000-01-01.  Each entry pairs an
@@ -40,8 +40,8 @@ static const struct {
     {     94694400, "01.01.2003 00:00:00" },              /* normal Jan 1              */
 };
 
-int main(void)
-{
+int
+main(void) {
     char buf[20];
     int i;
 

@@ -14,8 +14,8 @@
  */
 #include "minix_adapter.h"
 
-static int test_minix_adapter(void)
-{
+static int
+test_minix_adapter(void) {
     zeta_state_t state;
     minix_proc_map_t proc = {
         {
@@ -63,7 +63,7 @@ static int test_minix_adapter(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_minix_adapter();
 }

@@ -1,7 +1,7 @@
 #ifndef MUZIX_ZETA_TICK_H
 #define MUZIX_ZETA_TICK_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../../lib/proc_info.h"
 
@@ -57,6 +57,11 @@ uint16_t muzix_tick_calibrate_ctc3(void);
 extern volatile uint8_t muzix_tick_calibration_status;
 /* Number of tick interrupts observed before calibration failed (0..65535). */
 extern volatile uint16_t muzix_tick_calibration_elapsed_ticks;
+/* CTC3 counts per 120 Hz tick, as measured by muzix_tick_calibrate_ctc3().
+ * CPU frequency = this * 120 Hz.  Read-only after calibration. */
+extern uint16_t muzix_tick_ctc3_counts_per_tick;
+/* Calibrated CPU frequency in MHz * 10 (e.g., 40 = 4.0 MHz). */
+uint8_t muzix_tick_get_cpu_mhz_x10(void);
 
 /* Read the tick counter, low first in memory and high first here.
  *
@@ -127,17 +132,49 @@ void muzix_tick_stamp_store(uint16_t *stamp);
 
 /* One count of the free-running cycle counter on CTC channel 3.
  *
- * 8 bits, wrapping every 256 counts = 65536 CPU cycles = 16.384 ms at 4 MHz. This
- * exists because the load accounting has to measure something an order of
+ * 8 bits, wrapping every 256 counts = 65536 CPU cycles = 16.384 ms at 4 MHz.
+ * This exists because the load accounting has to measure something an order of
  * magnitude smaller than a tick: an idle wakeup costs roughly 5500 cycles, and a
  * tick is 61440, so the tick cannot resolve it at all.
  *
  * The only thing it is read for is the gap between one halt returning and the
- * next halt being entered - a few thousand cycles, about 11 counts at 4 MHz. A gap long
- * enough to wrap would be 8.9 ms of the kernel running flat out, which is a
- * different fault entirely and shows up as a load figure of 1.00 rather than as
- * a wrong number here. */
+ * next halt being entered - a few thousand cycles, about 11 counts at 4 MHz.
+ *
+ * The modulo-256 delta (before - after) used by kernel_halt() is unambiguous
+ * only when fewer than 256 CTC3 counts elapse between observations.  At the
+ * board's 4 MHz oscillator this is 130 counts per tick (8.33 ms per tick), so
+ * a single-tick halt interval never wraps.  At 8 MHz it is ~260 counts/tick
+ * and at 10 MHz ~326 counts/tick, so a halt interval can cross the counter
+ * wrap and the measurement is ambiguous without additional hardware support.
+ * Load averages are therefore accurate at 2, 4 and 6 MHz and undefined above.
+ * The calibrated counts_per_tick value is stored as uint16_t and is correct
+ * at all supported frequencies; only the HALT measurement is frequency-limited. */
 uint8_t muzix_tick_cycles(void);
+
+/* Read the CTC0/CTC1 cascade phase counter.  Returns a value in the range
+ * 0-7679 representing the phase within the current 120 Hz tick (each count is
+ * one CTC0 cycle = 1/921600 s = 1.085 us).  Reads CTC0-CTC1-CTC0 and verifies
+ * that CTC0 did not change between the two reads; if it did (CTC0 wrapped),
+ * retries.  Safe to call from any context: saves and restores the interrupt
+ * state itself.
+ *
+ * Result in DE (SDCC -mz80 16-bit return convention).  May be called from C
+ * or assembly.  From an interrupt handler, call _muzix_ctc01_read_phase_nosave
+ * directly instead to avoid the DI/EI overhead.
+ */
+uint16_t muzix_ctc01_read_phase(void);
+
+/* Same as _muzix_ctc01_read_phase but without the DI/EI wrapper.  Intended for
+ * use from interrupt context where interrupts are already disabled.  All
+ * registers preserved except DE (return value). */
+void muzix_ctc01_read_phase_nosave(void);
+
+/* Wake-phase snapshot: written by the tick and UART ISRs at their entry point
+ * (the moment the CPU left HALT), read by kernel_halt() after HALT returns.
+ * Stored in _DATA (window 3, always kernel) so reachable from any process map.
+ */
+extern uint16_t muzix_ctc01_wake_phase;
+extern uint8_t  muzix_ctc01_wake_valid;
 
 /* Raw CTC channel down-counters, for the boot probe ONLY.
  *

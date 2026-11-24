@@ -4,7 +4,7 @@
 #include "inode_store.h"
 #include "volume.h"
 
-#include <string.h>
+#include "libc.h"
 
 /* host-test-provides: rom_read_block */
 
@@ -85,35 +85,35 @@ static uint8_t disk[TEST_BLOCK_SIZE * TEST_BLOCK_COUNT];
 typedef char muzix_fs_inode_slots_fill_one_block[
     (MUZIX_FS_INODE_SLOTS * TEST_INODE_DISK_SIZE == TEST_BLOCK_SIZE) ? 1 : -1];
 
-static void put16(uint8_t *data, uint16_t value)
-{
+static void
+put16(uint8_t *data, uint16_t value) {
     data[0] = (uint8_t)value;
     data[1] = (uint8_t)(value >> 8);
 }
 
-static void put32(uint8_t *data, uint32_t value)
-{
+static void
+put32(uint8_t *data, uint32_t value) {
     data[0] = (uint8_t)value;
     data[1] = (uint8_t)(value >> 8);
     data[2] = (uint8_t)(value >> 16);
     data[3] = (uint8_t)(value >> 24);
 }
 
-static uint16_t get16(const uint8_t *data)
-{
+static uint16_t
+get16(const uint8_t *data) {
     return (uint16_t)((uint16_t)data[0] | ((uint16_t)data[1] << 8));
 }
 
-static uint32_t get32(const uint8_t *data)
-{
+static uint32_t
+get32(const uint8_t *data) {
     return (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
            ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
 }
 
 /* ---- the image, written the way make_minixfs.rb writes it -------------- */
 
-static void romfs_mark_zone(uint16_t zone)
-{
+static void
+romfs_mark_zone(uint16_t zone) {
     disk[TEST_ALLOCATOR_BLOCK * TEST_BLOCK_SIZE + 4u + zone / 8u] |=
         (uint8_t)(1u << (zone % 8u));
 }
@@ -159,8 +159,8 @@ static uint8_t romfs_big_byte(uint32_t position)
     return (uint8_t)((zone * 37u) ^ (within * 11u) ^ 0xa5u);
 }
 
-static void romfs_build_image(void)
-{
+static void
+romfs_build_image(void) {
     uint16_t zones[MUZIX_FS_DIRECT_ZONES];
     uint8_t zone;
 
@@ -278,8 +278,8 @@ static int romfs_mount(muzix_fs_volume_t *volume,
     return muzix_fs_volume_mount(volume);
 }
 
-static void romfs_build_device(muzix_block_device_t *device)
-{
+static void
+romfs_build_device(muzix_block_device_t *device) {
     device->context = 0;
     device->read = read_block;
     device->write = write_block;
@@ -288,8 +288,8 @@ static void romfs_build_device(muzix_block_device_t *device)
 
 /* ---- the assertions ---------------------------------------------------- */
 
-static int test_superblock_geometry(muzix_fs_volume_t *volume)
-{
+static int
+test_superblock_geometry(muzix_fs_volume_t *volume) {
     if (volume->superblock.value.ninodes != TEST_INODE_COUNT ||
         volume->superblock.value.nzones != TEST_ZONE_COUNT ||
         volume->superblock.value.imap_blocks != 1 ||
@@ -309,8 +309,8 @@ static int test_superblock_geometry(muzix_fs_volume_t *volume)
     return 0;
 }
 
-static int test_root_inode(muzix_fs_volume_t *volume)
-{
+static int
+test_root_inode(muzix_fs_volume_t *volume) {
     muzix_fs_inode_t *root =
         muzix_fs_inode_get(&volume->inodes, TEST_ROOT_INODE);
 
@@ -329,8 +329,8 @@ static int test_root_inode(muzix_fs_volume_t *volume)
     return 0;
 }
 
-static int test_file_inodes(muzix_fs_volume_t *volume)
-{
+static int
+test_file_inodes(muzix_fs_volume_t *volume) {
     muzix_fs_inode_t *hello =
         muzix_fs_inode_get(&volume->inodes, TEST_HELLO_INODE);
     muzix_fs_inode_t *big = muzix_fs_inode_get(&volume->inodes, TEST_BIG_INODE);
@@ -357,8 +357,8 @@ static int test_file_inodes(muzix_fs_volume_t *volume)
     return 0;
 }
 
-static int test_directory_entries(muzix_fs_volume_t *volume)
-{
+static int
+test_directory_entries(muzix_fs_volume_t *volume) {
     uint16_t inode;
 
     if (muzix_fs_directory_lookup(&volume->root_directory, ".", &inode) != 0 ||
@@ -385,8 +385,8 @@ static int test_directory_entries(muzix_fs_volume_t *volume)
     return 0;
 }
 
-static int test_file_contents(muzix_fs_volume_t *volume)
-{
+static int
+test_file_contents(muzix_fs_volume_t *volume) {
     muzix_fs_inode_t *hello =
         muzix_fs_inode_get(&volume->inodes, TEST_HELLO_INODE);
     muzix_fs_inode_t *big = muzix_fs_inode_get(&volume->inodes, TEST_BIG_INODE);
@@ -507,8 +507,8 @@ static int test_inode_round_trip(muzix_fs_volume_t *volume)
  * is checked against the image instead of against itself. */
 #define TEST_MAX_ZONES 768u
 
-static int test_zone_ceiling(void)
-{
+static int
+test_zone_ceiling(void) {
     muzix_fs_zone_allocator_t allocator;
     muzix_fs_zone_allocator_t reloaded;
     muzix_fs_block_cache_t cache;
@@ -578,8 +578,8 @@ static int test_refused_volumes(void)
     return 0;
 }
 
-static int test_romfs_format(void)
-{
+static int
+test_romfs_format(void) {
     muzix_fs_volume_t volume;
     muzix_block_device_t device;
     int status;
@@ -616,7 +616,7 @@ static int test_romfs_format(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_romfs_format();
 }

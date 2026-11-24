@@ -1,6 +1,6 @@
 #include "runtime_state.h"
 
-#include <string.h>
+#include "libc.h"
 #include "../mm/mm_service.h"
 
 /* Every operation here is a forward onto proc_table. The struct no longer holds
@@ -15,8 +15,8 @@
  * Collapsing the whole chain is a separate change; removing the duplicated
  * state inside it is what fixes the scheduler. */
 
-void muzix_runtime_state_init(muzix_runtime_state_t *rt, const process_map_t *kernel_map)
-{
+void
+muzix_runtime_state_init(muzix_runtime_state_t *rt, const process_map_t *kernel_map) {
     if (!rt) {
         return;
     }
@@ -27,13 +27,13 @@ void muzix_runtime_state_init(muzix_runtime_state_t *rt, const process_map_t *ke
     }
 }
 
-void muzix_runtime_state_register(muzix_runtime_state_t *rt,
-                                 int slot,
-                                 uint8_t pid,
-                                 const muzix_mproc_t *mp,
-                                 const process_map_t *map,
-                                 uint8_t q)
-{
+void
+muzix_runtime_state_register(muzix_runtime_state_t *rt,
+                             int slot,
+                             uint8_t pid,
+                             const muzix_mproc_t *mp,
+                             const process_map_t *map,
+                             uint8_t q) {
     if (!rt || !rt->table || !mp || !map ||
         slot < 0 || slot >= MUZIX_RUNTIME_MAX_PROC) {
         return;
@@ -42,8 +42,8 @@ void muzix_runtime_state_register(muzix_runtime_state_t *rt,
     muzix_proc_table_register(rt->table, slot, pid, mp, map, q, 0);
 }
 
-void muzix_runtime_state_pick_next(muzix_runtime_state_t *rt, muzix_mm_service_t *mm)
-{
+void
+muzix_runtime_state_pick_next(muzix_runtime_state_t *rt, muzix_mm_service_t *mm) {
     if (!rt || !rt->table) {
         return;
     }
@@ -65,8 +65,8 @@ void muzix_runtime_state_pick_next(muzix_runtime_state_t *rt, muzix_mm_service_t
     }
 }
 
-void muzix_runtime_state_switch_to_kernel(muzix_runtime_state_t *rt, muzix_mm_service_t *mm)
-{
+void
+muzix_runtime_state_switch_to_kernel(muzix_runtime_state_t *rt, muzix_mm_service_t *mm) {
     if (!rt || !rt->table) {
         return;
     }
@@ -77,8 +77,8 @@ void muzix_runtime_state_switch_to_kernel(muzix_runtime_state_t *rt, muzix_mm_se
     }
 }
 
-int muzix_runtime_state_current_pid(const muzix_runtime_state_t *rt)
-{
+int
+muzix_runtime_state_current_pid(const muzix_runtime_state_t *rt) {
     if (!rt || !rt->table) {
         return -1;
     }

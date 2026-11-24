@@ -1,4 +1,4 @@
-#include <string.h>
+#include "libc.h"
 
 #include "syscall_entry.h"
 
@@ -177,8 +177,8 @@ static int test_bound(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     int rc = test_unbound();
 
     if (rc != 0) {

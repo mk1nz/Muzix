@@ -1,6 +1,6 @@
 #include "inode_store.h"
 
-#include <string.h>
+#include "libc.h"
 
 /* The on-disk inode record, in the order tools/make_minixfs.rb writes it and
  * kernel/exec_loader.c reads it back (MINIX-v1 d_inode1).  Thirty-two bytes:
@@ -27,25 +27,25 @@
 #define MUZIX_FS_INODE_INDIRECT_OFFSET 28u
 #define MUZIX_FS_INODE_USED_OFFSET 30u
 
-static uint16_t get16(const uint8_t *data)
-{
+static uint16_t
+get16(const uint8_t *data) {
     return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
 }
 
-static uint32_t get32(const uint8_t *data)
-{
+static uint32_t
+get32(const uint8_t *data) {
     return (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
            ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
 }
 
-static void put16(uint8_t *data, uint16_t value)
-{
+static void
+put16(uint8_t *data, uint16_t value) {
     data[0] = (uint8_t)value;
     data[1] = (uint8_t)(value >> 8);
 }
 
-static void put32(uint8_t *data, uint32_t value)
-{
+static void
+put32(uint8_t *data, uint32_t value) {
     data[0] = (uint8_t)value;
     data[1] = (uint8_t)(value >> 8);
     data[2] = (uint8_t)(value >> 16);

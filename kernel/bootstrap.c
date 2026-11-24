@@ -1,12 +1,12 @@
 #include "bootstrap.h"
 
-#include <string.h>
+#include "libc.h"
 
-void muzix_bootstrap_init(muzix_kernel_bootstrap_t *boot,
-                          const process_map_t *kernel_map,
-                          uint8_t init_pid,
-                          const process_map_t *init_map)
-{
+void
+muzix_bootstrap_init(muzix_kernel_bootstrap_t *boot,
+                      const process_map_t *kernel_map,
+                      uint8_t init_pid,
+                      const process_map_t *init_map) {
     if (!boot) {
         return;
     }
@@ -34,13 +34,13 @@ void muzix_bootstrap_init(muzix_kernel_bootstrap_t *boot,
     }
 }
 
-void muzix_bootstrap_register_task(muzix_kernel_bootstrap_t *boot,
-                                  int slot,
-                                  uint8_t pid,
-                                  const muzix_mproc_t *mp,
-                                  const process_map_t *map,
-                                  uint8_t q)
-{
+void
+muzix_bootstrap_register_task(muzix_kernel_bootstrap_t *boot,
+                               int slot,
+                               uint8_t pid,
+                               const muzix_mproc_t *mp,
+                               const process_map_t *map,
+                               uint8_t q) {
     if (!boot) {
         return;
     }
@@ -48,8 +48,8 @@ void muzix_bootstrap_register_task(muzix_kernel_bootstrap_t *boot,
     muzix_runtime_state_register(&boot->runtime, slot, pid, mp, map, q);
 }
 
-void muzix_bootstrap_run(muzix_kernel_bootstrap_t *boot)
-{
+void
+muzix_bootstrap_run(muzix_kernel_bootstrap_t *boot) {
     if (!boot) {
         return;
     }
@@ -60,8 +60,8 @@ void muzix_bootstrap_run(muzix_kernel_bootstrap_t *boot)
     }
 }
 
-void muzix_bootstrap_switch_to_kernel(muzix_kernel_bootstrap_t *boot)
-{
+void
+muzix_bootstrap_switch_to_kernel(muzix_kernel_bootstrap_t *boot) {
     if (!boot) {
         return;
     }
@@ -69,8 +69,8 @@ void muzix_bootstrap_switch_to_kernel(muzix_kernel_bootstrap_t *boot)
     muzix_runtime_state_switch_to_kernel(&boot->runtime, NULL);
 }
 
-int muzix_bootstrap_current_pid(const muzix_kernel_bootstrap_t *boot)
-{
+int
+muzix_bootstrap_current_pid(const muzix_kernel_bootstrap_t *boot) {
     if (!boot) {
         return -1;
     }

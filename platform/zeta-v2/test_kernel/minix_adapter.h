@@ -1,7 +1,7 @@
 #ifndef MUZIX_MINIX_ADAPTER_H
 #define MUZIX_MINIX_ADAPTER_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "bank_model.h"
 

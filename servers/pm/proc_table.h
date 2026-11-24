@@ -1,8 +1,7 @@
 #ifndef MUZIX_PM_PROC_TABLE_H
 #define MUZIX_PM_PROC_TABLE_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../../lib/proc_info.h"
 #include "../../mm/mproc_model.h"

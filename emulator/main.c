@@ -30,8 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include "ztypes.h"
 #include <unistd.h>
 #include <getopt.h>
 #include <signal.h>
@@ -55,8 +54,8 @@ static bool g_running = true;
  * Signal Handling
  * ============================================================================ */
 
-static void signal_handler(int sig)
-{
+static void
+signal_handler(int sig) {
     (void)sig;
     fprintf(stderr, "\nReceived interrupt, stopping...\n");
     g_running = false;
@@ -65,8 +64,8 @@ static void signal_handler(int sig)
     }
 }
 
-static void setup_signals(void)
-{
+static void
+setup_signals(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
@@ -81,8 +80,8 @@ static void setup_signals(void)
  * Help and Version
  * ============================================================================ */
 
-static void print_version(void)
-{
+static void
+print_version(void) {
     printf("%s v%s\n", EMULATOR_NAME, EMULATOR_VERSION);
     printf("Z80 CPU emulator based on z80pack architecture\n");
     printf("\n");
@@ -90,8 +89,8 @@ static void print_version(void)
     printf("License: MIT\n");
 }
 
-static void print_help(const char* program)
-{
+static void
+print_help(const char* program) {
     printf("Usage: %s [options] [rom_file]\n", program);
     printf("\n");
     printf("%s - Z80 CPU emulator based on z80pack\n", EMULATOR_NAME);
@@ -134,16 +133,16 @@ static void print_help(const char* program)
  * Serial Output
  * ============================================================================ */
 
-static void serial_output(uint8_t byte, void* userdata)
-{
+static void
+serial_output(uint8_t byte, void* userdata) {
     (void)userdata;
     /* Output character immediately - use putchar for better buffering control */
     putchar(byte);
     fflush(stdout);  /* Ensure it's flushed immediately */
 }
 
-static void pump_stdin_to_input_buffer(z80pack_t* pack)
-{
+static void
+pump_stdin_to_input_buffer(z80pack_t* pack) {
     if (!pack || !pack->enable_stdin_input) {
         return;
     }
@@ -181,8 +180,8 @@ static void pump_stdin_to_input_buffer(z80pack_t* pack)
     }
 }
 
-static uint8_t serial_recv(void* userdata)
-{
+static uint8_t
+serial_recv(void* userdata) {
     z80pack_t* pack = (z80pack_t*)userdata;
 
     if (!pack) return 0;
@@ -206,8 +205,8 @@ static bool serial_available(void* userdata)
  * Main
  * ============================================================================ */
 
-static void atexit_dump_trace(z80pack_t *pack)
-{
+static void
+atexit_dump_trace(z80pack_t *pack) {
     if (pack) {
         z80pack_dump_trace(pack);
     }
@@ -230,12 +229,12 @@ static uint16_t z80_addr(const char *text)
     return (uint16_t)strtol(text, NULL, 16);
 }
 
-int main(int argc, char* argv[])
-{
+int
+main(int argc, char* argv[]) {
     /* Make output unbuffered */
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
-    
+
     /* Configuration */
     const char* rom_file = NULL;
     const char* disk_file = NULL;

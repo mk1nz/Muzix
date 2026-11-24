@@ -1,7 +1,7 @@
 #ifndef MUZIX_ZETA_TRACE_H
 #define MUZIX_ZETA_TRACE_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 /*
  * Kernel trace ring.
@@ -26,14 +26,21 @@
 /*
  * Trace can be enabled at runtime via emulator -t flag.
  * The emulator writes to TRACE_ENABLE_ADDR (0xFC00) at startup if -t is given.
- * The kernel checks this address at initialization.
- * Using common memory area (0xFC00-0xFFFF) which is not banked.
+ * The kernel samples this address once at initialization into g_muzix_trace_enabled.
+ *
+ * At runtime, MUZIX_TRACE_ENABLED checks only g_muzix_trace_enabled — it does
+ * NOT re-read 0xFC00.  The kernel stack lives in window 3 (0xC000-0xFFFF), and
+ * a 512-byte stack local at around 0xFB23 extends past 0xFC00.  An LDI copy
+ * into such a buffer would write kernel data over TRACE_ENABLE_ADDR, and a
+ * live read of 0xFC00 on every trace call would then mistake that kernel
+ * stack data for an enable instruction.  The one-time boot sample into
+ * g_muzix_trace_enabled is the sole runtime test.
  */
 #define TRACE_ENABLE_ADDR 0xFC00
 
 extern uint8_t g_muzix_trace_enabled;
 
-#define MUZIX_TRACE_ENABLED (g_muzix_trace_enabled || (*(volatile uint8_t*)TRACE_ENABLE_ADDR != 0))
+#define MUZIX_TRACE_ENABLED (g_muzix_trace_enabled != 0)
 
 #define MUZIX_TRACE_RING_SIZE 128u
 

@@ -1,9 +1,7 @@
 #ifndef MUZIX_BANK_MODEL_H
 #define MUZIX_BANK_MODEL_H
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include "ztypes.h"
 
 /*
  * Small prototype sizing for Z80/SDCC. The logic stays the same as the real

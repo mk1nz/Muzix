@@ -1,12 +1,13 @@
 #ifndef MUZIX_SERVER_H
 #define MUZIX_SERVER_H
 
-#include <stdint.h>
+#include<ztypes.h>
 
 #define MUZIX_SERVER_TYPE_FS    1
 #define MUZIX_SERVER_TYPE_MM    2
 #define MUZIX_SERVER_TYPE_PM    3
 #define MUZIX_SERVER_TYPE_TTY   4
+#define MUZIX_SERVER_TYPE_CRON  5
 
 #define MUZIX_SERVER_STACK_SIZE 1024
 

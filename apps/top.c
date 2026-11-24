@@ -126,29 +126,29 @@ static struct proc_info table[MUZIX_PROC_INFO_SLOTS];
 
 static void out_flush(void);
 
-static void out(char c)
-{
+static void
+out(char c) {
     if (used >= (int)sizeof(line)) {
         out_flush();
     }
     line[used++] = c;
 }
 
-static void out_str(const char *s)
-{
+static void
+out_str(const char *s) {
     while (*s) {
         out(*s++);
     }
 }
 
-static void out_end(void)
-{
+static void
+out_end(void) {
     out('\n');
     out_flush();
 }
 
-static void out_flush(void)
-{
+static void
+out_flush(void) {
     if (used != 0) {
         write(1, line, (size_t)used);
         used = 0;
@@ -275,8 +275,8 @@ static void put2(int value)
  */
 #define WAIT_SLICE_TICKS 30         /* a quarter of a second at 120 Hz */
 
-static void wait_seconds(int from, int seconds)
-{
+static void
+wait_seconds(int from, int seconds) {
     struct rtc_time now;
     int elapsed;
 
@@ -373,8 +373,8 @@ static void wait_seconds(int from, int seconds)
  * and nothing here has established that the far end decodes 8-bit controls. */
 static const char screen_clear[] = "\033[2J\033[H";
 
-static void clear_screen(void)
-{
+static void
+clear_screen(void) {
     write(1, screen_clear, sizeof(screen_clear) - 1);
 }
 
@@ -556,8 +556,8 @@ static void put_load(uint32_t value)
     put2((int)frac);
 }
 
-static int print_summary(const uint32_t loads[3], uint32_t live)
-{
+static int
+print_summary(const uint32_t loads[3], uint32_t live) {
     struct rtc_time t;
 
     if (get_rtc(&t) != 0) {
@@ -583,14 +583,14 @@ static int print_summary(const uint32_t loads[3], uint32_t live)
     return t.second;
 }
 
-static void print_columns(void)
-{
+static void
+print_columns(void) {
     out_str("  PID  PPID Q ST     UTIME      STIME     CUTIME     CSTIME  COMMAND");
     out_end();
 }
 
-static void print_rule(void)
-{
+static void
+print_rule(void) {
     static const char dashes[] =
         "--------------------------------------------------------";
 
@@ -638,8 +638,8 @@ static void print_note(void)
     out_end();
 }
 
-int main(int argc, char *argv[])
-{
+int
+main(int argc, char *argv[]) {
     struct proc_info *info = table;
     int slot;
     int stamp;

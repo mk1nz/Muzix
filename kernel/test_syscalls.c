@@ -2,6 +2,7 @@
 #include "kernel_loop.h"
 #include "proc_context.h"
 #include "exec_loader.h"
+#include "system_task.h"
 #include "../fs/fs_service.h"
 #include "../fs/tty_device.h"
 #include "../mm/mproc_model.h"
@@ -9,9 +10,9 @@
 #include "../platform/zeta-v2/context_switch.h"
 #include "../platform/zeta-v2/rtc_ds1302.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "libc.h"
+#include "libc.h"
+#include "libc.h"
 
 /*
  * kernel/syscalls.c, brought back against the current API.
@@ -219,8 +220,8 @@ static size_t g_seen_read_pos;         /* offset into the counting pattern */
 static int g_seen_readdir_inode;
 static char g_seen_getcwd[64];
 
-static void seen_reset(void)
-{
+static void
+seen_reset(void) {
     const char *which = g_seen.which;
 
     memset(&g_seen, 0, sizeof(g_seen));
@@ -233,16 +234,16 @@ static void seen_reset(void)
     g_seen_getcwd[0] = '/';
 }
 
-static void seen_enter(const char *which)
-{
+static void
+seen_enter(const char *which) {
     if (g_seen.calls == 0) {
         g_seen.which = which;
     }
     g_seen.calls++;
 }
 
-static void seen_path(const char *which, const char *path, const char *path2)
-{
+static void
+seen_path(const char *which, const char *path, const char *path2) {
     seen_enter(which);
     if (path) {
         strncpy(g_seen.path, path, SEEN_PATH_MAX - 1);
@@ -254,35 +255,35 @@ static void seen_path(const char *which, const char *path, const char *path2)
     }
 }
 
-static int seen_reached(const char *which)
-{
+static int
+seen_reached(const char *which) {
     return g_seen.calls > 0 && g_seen.which && strcmp(g_seen.which, which) == 0;
 }
 
 /* ------------------------------------------------------ caller-side helpers */
 
-static void put_user(uint16_t addr, const void *src, size_t n)
-{
+static void
+put_user(uint16_t addr, const void *src, size_t n) {
     memcpy(&muzix_host_user_space()[addr], src, n);
 }
 
-static void put_str(uint16_t addr, const char *s)
-{
+static void
+put_str(uint16_t addr, const char *s) {
     put_user(addr, s, strlen(s) + 1);
 }
 
-static void user_get(uint16_t addr, void *dst, size_t n)
-{
+static void
+user_get(uint16_t addr, void *dst, size_t n) {
     memcpy(dst, &muzix_host_user_space()[addr], n);
 }
 
-static int user_eq(uint16_t addr, const void *src, size_t n)
-{
+static int
+user_eq(uint16_t addr, const void *src, size_t n) {
     return memcmp(&muzix_host_user_space()[addr], src, n) == 0;
 }
 
-static int32_t call_user(int32_t num, int32_t a1, int32_t a2, int32_t a3)
-{
+static int32_t
+call_user(int32_t num, int32_t a1, int32_t a2, int32_t a3) {
     return muzix_handle_userspace_syscall(&g_ctx, num, a1, a2, a3);
 }
 
@@ -300,8 +301,8 @@ static char g_loader_arg0[SEEN_PATH_MAX];
 static char g_loader_arg1[SEEN_PATH_MAX];
 static int g_loader_slot;
 
-static int test_exec_loader(const char *path, const char *const *argv, int slot)
-{
+static int
+test_exec_loader(const char *path, const char *const *argv, int slot) {
     g_loader_calls++;
     g_loader_slot = slot;
     g_loader_argc = 0;
@@ -338,8 +339,8 @@ typedef struct {
 static xfer_t g_to_user;
 static xfer_t g_from_user;
 
-static void xfer_note(xfer_t *x, uint16_t addr, uint16_t len)
-{
+static void
+xfer_note(xfer_t *x, uint16_t addr, uint16_t len) {
     if (x->calls < SEEN_MAX_CHUNKS) {
         x->addr[x->calls] = addr;
         x->len[x->calls] = len;
@@ -350,8 +351,8 @@ static void xfer_note(xfer_t *x, uint16_t addr, uint16_t len)
     x->calls++;
 }
 
-static void xfer_reset(xfer_t *x)
-{
+static void
+xfer_reset(xfer_t *x) {
     memset(x, 0, sizeof(*x));
 }
 
@@ -424,8 +425,8 @@ void muzix_mm_service_init(muzix_mm_service_t *mm,
     mm->source = source;
 }
 
-void muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_map)
-{
+void
+muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_map) {
     if (!mm || !kernel_map) {
         return;
     }
@@ -434,14 +435,14 @@ void muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_ma
     zeta_memory_init(kernel_map);
 }
 
-int muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page)
-{
+int
+muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page) {
     (void)mm;
     return zeta_memory_alloc_page(page);
 }
 
-void muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page)
-{
+void
+muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page) {
     (void)mm;
     zeta_memory_release_page(page);
 }
@@ -524,22 +525,22 @@ int muzix_fs_service_mkdir_path(muzix_fs_service_t *fs, const char *path,
     return 0;
 }
 
-int muzix_fs_service_rmdir_path(muzix_fs_service_t *fs, const char *path)
-{
+int
+muzix_fs_service_rmdir_path(muzix_fs_service_t *fs, const char *path) {
     (void)fs;
     seen_path("rmdir", path, 0);
     return 0;
 }
 
-int muzix_fs_service_chdir(muzix_fs_service_t *fs, const char *path)
-{
+int
+muzix_fs_service_chdir(muzix_fs_service_t *fs, const char *path) {
     (void)fs;
     seen_path("chdir", path, 0);
     return 0;
 }
 
-int muzix_fs_service_unlink_path(muzix_fs_service_t *fs, const char *path)
-{
+int
+muzix_fs_service_unlink_path(muzix_fs_service_t *fs, const char *path) {
     (void)fs;
     seen_path("unlink", path, 0);
     return 0;
@@ -599,24 +600,24 @@ int muzix_fs_service_getcwd(const muzix_fs_service_t *fs, char *buffer, size_t s
     return 0;
 }
 
-int muzix_fs_service_close(muzix_fs_service_t *fs, int handle)
-{
+int
+muzix_fs_service_close(muzix_fs_service_t *fs, int handle) {
     (void)fs;
     seen_enter("close");
     g_seen.fd = handle;
     return g_seen_close_rc;
 }
 
-int muzix_fs_service_dup(muzix_fs_service_t *fs, int handle)
-{
+int
+muzix_fs_service_dup(muzix_fs_service_t *fs, int handle) {
     (void)fs;
     seen_enter("dup");
     g_seen.fd = handle;
     return handle + 10;
 }
 
-int muzix_fs_service_pipe(muzix_fs_service_t *fs, int fds[2])
-{
+int
+muzix_fs_service_pipe(muzix_fs_service_t *fs, int fds[2]) {
     (void)fs;
     seen_enter("pipe");
     if (!fds) {
@@ -627,8 +628,8 @@ int muzix_fs_service_pipe(muzix_fs_service_t *fs, int fds[2])
     return 0;
 }
 
-int muzix_fs_service_seek(muzix_fs_service_t *fs, int handle, uint32_t position)
-{
+int
+muzix_fs_service_seek(muzix_fs_service_t *fs, int handle, uint32_t position) {
     (void)fs;
     seen_enter("seek");
     g_seen.fd = handle;
@@ -636,8 +637,8 @@ int muzix_fs_service_seek(muzix_fs_service_t *fs, int handle, uint32_t position)
     return g_seen_seek_rc;
 }
 
-int muzix_fs_service_sync(muzix_fs_service_t *fs)
-{
+int
+muzix_fs_service_sync(muzix_fs_service_t *fs) {
     (void)fs;
     seen_enter("sync");
     return 0;
@@ -754,47 +755,47 @@ int muzix_fs_service_readdir(muzix_fs_service_t *fs, int handle, uint16_t index,
 /* Five more, for the same reason: excluding fs/fs_service.c leaves them
  * undefined and nothing below reaches them.  They exist for the closure, not
  * for any assertion here. */
-void muzix_fs_service_init(muzix_fs_service_t *fs, muzix_system_task_t *task,
+void muzix_fs_service_init(muzix_fs_service_t *fs, void *system_task,
                            uint8_t source)
 {
     if (!fs) {
         return;
     }
     memset(fs, 0, sizeof(*fs));
-    fs->system_task = task;
+    fs->system_task = system_task;
     fs->source = source;
 }
 
-void muzix_fs_service_attach_volume(muzix_fs_service_t *fs, muzix_fs_volume_t *volume)
-{
+void
+muzix_fs_service_attach_volume(muzix_fs_service_t *fs, muzix_fs_volume_t *volume) {
     if (fs) {
         fs->volume = volume;
     }
 }
 
-void muzix_fs_service_attach_tty(muzix_fs_service_t *fs, muzix_tty_device_t *tty)
-{
+void
+muzix_fs_service_attach_tty(muzix_fs_service_t *fs, muzix_tty_device_t *tty) {
     if (fs) {
         fs->tty = tty;
     }
 }
 
-int muzix_fs_service_open_path(muzix_fs_service_t *fs, const char *path)
-{
+int
+muzix_fs_service_open_path(muzix_fs_service_t *fs, const char *path) {
     (void)fs;
     seen_path("open_path", path, 0);
     return g_seen_open_fd;
 }
 
-int muzix_fs_service_open_root(muzix_fs_service_t *fs, const char *name)
-{
+int
+muzix_fs_service_open_root(muzix_fs_service_t *fs, const char *name) {
     (void)fs;
     seen_path("open_root", name, 0);
     return g_seen_open_fd;
 }
 
-int muzix_fs_service_open_tty(muzix_fs_service_t *fs)
-{
+int
+muzix_fs_service_open_tty(muzix_fs_service_t *fs) {
     (void)fs;
     seen_enter("open_tty");
     return 0;
@@ -802,18 +803,18 @@ int muzix_fs_service_open_tty(muzix_fs_service_t *fs)
 
 /* ------------------------------------------------------------ the fixture */
 
-static void chip_write(uint8_t port, uint8_t value)
-{
+static void
+chip_write(uint8_t port, uint8_t value) {
     muzix_host_ds1302_write(port, value);
 }
 
-static uint8_t chip_read(uint8_t port)
-{
+static uint8_t
+chip_read(uint8_t port) {
     return muzix_host_ds1302_read(port);
 }
 
-static void setup(void)
-{
+static void
+setup(void) {
     int i;
 
     muzix_host_user_space_clear();
@@ -988,8 +989,8 @@ static long find_after(const char *text, const char *needle)
     return hit ? (long)(hit - text) + (long)strlen(needle) : -1;
 }
 
-static char *slurp(const char *path)
-{
+static char
+*slurp(const char *path) {
     static char buf[262144];
     FILE *f = fopen(path, "rb");
     size_t n;
@@ -1216,8 +1217,8 @@ static int check_crt0_hands_over_registers(char *report, size_t report_len)
     return 0;
 }
 
-static int test_calling_convention(void)
-{
+static int
+test_calling_convention(void) {
     char report[1024];
 
     if (measure_the_convention(report, sizeof(report)) != 0) {
@@ -1233,8 +1234,8 @@ static int test_calling_convention(void)
 
 /* ============================== case 2: dispatch and identity ============== */
 
-static int test_dispatch_and_identity(void)
-{
+static int
+test_dispatch_and_identity(void) {
     muzix_syscall_t call;
 
     CHECK(call_user(MUZIX_USER_SYS_GETPID, 0, 0, 0) == 1, 1);
@@ -1285,8 +1286,8 @@ static int test_dispatch_and_identity(void)
     return 0;
 }
 
-static int test_sys_copy_arguments_reach_the_memory_manager(void)
-{
+static int
+test_sys_copy_arguments_reach_the_memory_manager(void) {
     static muzix_copy_request_t req;
     static uint8_t payload[64];
     muzix_syscall_t call;
@@ -1540,8 +1541,8 @@ static int test_a_path_that_will_not_copy_in_is_refused(void)
 
 /* ============================== case 4: buffers and counts ================= */
 
-static int test_read_and_write_carry_the_bytes(void)
-{
+static int
+test_read_and_write_carry_the_bytes(void) {
     static uint8_t payload[349];
     static uint8_t got[349];
     size_t i;
@@ -1630,8 +1631,8 @@ static int test_read_and_write_carry_the_bytes(void)
 
 /* ============================== case 5: the window discipline ============== */
 
-static int test_windows_zero_and_three_are_the_kernels(void)
-{
+static int
+test_windows_zero_and_three_are_the_kernels(void) {
     struct proc_info info;
 
     /* SYS_TIMES reports the caller's own slot; SYS_PROCTAB reports a slot the
@@ -1804,8 +1805,8 @@ static int test_the_clock_arguments(void)
 
 /* ============================== case 7: credentials ======================== */
 
-static int test_credentials(void)
-{
+static int
+test_credentials(void) {
     muzix_kernel_proc_table_t *t = &g_loop.system.startup.proc_table;
 
     CHECK(call_user(MUZIX_USER_SYS_GETUID, 0, 0, 0) == 100, 1);
@@ -1874,8 +1875,8 @@ static int test_credentials(void)
 
 /* ============================== case 8: signals =========================== */
 
-static int test_signals(void)
-{
+static int
+test_signals(void) {
     /* The target is named by pid, not by slot - the two coincide at boot and
      * stop coinciding the moment a pid >= MUZIX_PROC_TABLE_MAX exists. */
     g_loop.system.startup.proc_table.slots[1].uid = 100;
@@ -1909,7 +1910,70 @@ static int test_signals(void)
     return 0;
 }
 
-/* ============================== case 9: exec's arguments =================== */
+/* ============================== case 9: signal delivery ==================== */
+
+/*
+ * muzix_proc_table_deliver_pending() is the kernel half of SIGKILL: it is the
+ * only path that actually kills a process, releases its pages, and reports an
+ * exit status of 128 + signal.  The syscall layer (SYS_SIGNAL) only queues
+ * signals; delivery happens at safe kernel transition points.  These tests
+ * exercise the delivery function directly, since the syscall entry points are
+ * already covered by test_signals() above and by the emulator smoke tests.
+ */
+static int
+test_signal_delivery(void)
+{
+    muzix_kernel_proc_table_t *t = &g_loop.system.startup.proc_table;
+    int rc;
+
+    /* Slot 1 is a live userspace process (uid 100, registered above).  Give it
+     * a pending SIGKILL (9) and deliver.  It is not parked, so this is the
+     * "running process killed at syscall entry" path. */
+    t->slots[1].pending_signals = (uint16_t)1u << (9 - 1);
+    rc = muzix_proc_table_deliver_pending(t, 1, &g_mm);
+    CHECK(rc != 0, 1);                         /* delivered a signal */
+    CHECK(t->slots[1].active == 0, 2);         /* slot is dead */
+    CHECK(t->slots[1].p_flags == MUZIX_PROC_FREE, 3);
+    CHECK(t->slots[1].exited == 1, 4);
+    CHECK(t->slots[1].exit_status == (uint8_t)(128u + 9u), 5);
+    CHECK(t->slots[1].pending_signals == 0u, 6); /* bit cleared, not re-delivered */
+    CHECK(t->slots[1].owned_count == 0u, 7);   /* pages released */
+    CHECK(t->current == -1 || t->current != 1, 8); /* not current any more */
+
+    /* Slot 2 is free.  Delivering to it must fail. */
+    rc = muzix_proc_table_deliver_pending(t, 2, &g_mm);
+    CHECK(rc == -1, 9);
+
+    /* Slot 3: parked (WAIT_TICK set) with a pending signal.  Delivering to a
+     * parked process must kill it too - this is the "parked process woken and
+     * killed" path. */
+    t->slots[3].active = 1;
+    t->slots[3].pid = (uint8_t)3;
+    t->slots[3].p_flags = MUZIX_PROC_WAIT_TICK;
+    t->slots[3].pending_signals = (uint16_t)1u << (9 - 1);
+    t->slots[3].parent_pid = (uint8_t)1;
+    t->slots[3].owned_count = 1u;
+    t->slots[3].owned_pages[0] = 0x35u;
+    rc = muzix_proc_table_deliver_pending(t, 3, &g_mm);
+    CHECK(rc != 0, 10);
+    CHECK(t->slots[3].active == 0, 11);
+    CHECK(t->slots[3].exited == 1, 12);
+    CHECK(t->slots[3].exit_status == (uint8_t)(128u + 9u), 13);
+    CHECK(t->slots[3].pending_signals == 0u, 14);
+    CHECK(t->slots[3].owned_count == 0u, 15);
+    CHECK(t->slots[3].owned_pages[0] == 0u, 16);
+
+    /* A second delivery to the same slot must be a no-op (bit already cleared). */
+    rc = muzix_proc_table_deliver_pending(t, 3, &g_mm);
+    CHECK(rc == 0, 17);
+
+    /* Other slots are unaffected. */
+    CHECK(t->slots[0].active == 1, 18);
+    CHECK(t->slots[0].exited == 0, 19);
+    return 0;
+}
+
+/* ============================== case 10: exec's arguments =================== */
 
 /*
  * This is the syscall the argv bug went through, so it gets the closest
@@ -2269,8 +2333,8 @@ static int test_readdir_copies_the_entry_when_it_is_an_entry(void)
 
 /* ============================== case 13: getcwd =========================== */
 
-static int test_getcwd(void)
-{
+static int
+test_getcwd(void) {
     char got[64];
 
     strcpy(g_seen_getcwd, "/bin");
@@ -2327,8 +2391,8 @@ static int test_getcwd(void)
  * it therefore cannot also be the thing that decides whether an open succeeds.
  */
 
-int main(void)
-{
+int
+main(void) {
     static int (*const cases[])(void) = {
         test_calling_convention,
         test_dispatch_and_identity,
@@ -2340,6 +2404,7 @@ int main(void)
         test_the_clock_arguments,
         test_credentials,
         test_signals,
+        test_signal_delivery,
         test_exec_passes_the_paths_and_the_arguments,
         test_fork_copies_the_stack_into_a_page_of_the_childs,
         test_a_null_context_is_refused_everywhere,

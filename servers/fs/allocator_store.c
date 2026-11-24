@@ -1,6 +1,6 @@
 #include "allocator_store.h"
 
-#include <string.h>
+#include "libc.h"
 
 int muzix_fs_allocator_load(muzix_fs_block_cache_t *cache,
                             uint16_t block,

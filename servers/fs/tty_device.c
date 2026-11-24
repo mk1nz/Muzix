@@ -1,13 +1,13 @@
 #include "tty_device.h"
 #include "fs_syscalls.h"
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_TTY_READ_SECONDS 5
 #define MUZIX_TICKS_PER_SECOND 120
 #define MUZIX_TTY_READ_TICKS (MUZIX_TICKS_PER_SECOND * MUZIX_TTY_READ_SECONDS)
 
-static void tty_put_byte(int fd, uint8_t byte)
-{
+static void
+tty_put_byte(int fd, uint8_t byte) {
     size_t result;
     if (byte == '\n') {
         uint8_t cr = '\r';
@@ -16,15 +16,15 @@ static void tty_put_byte(int fd, uint8_t byte)
     sys_write(fd, &byte, 1, &result);
 }
 
-static void muzix_tty_echo(muzix_tty_device_t *tty, uint8_t byte)
-{
+static void
+muzix_tty_echo(muzix_tty_device_t *tty, uint8_t byte) {
     if ((tty->params.flags & MUZIX_TTY_FLAG_ECHO) != 0) {
         tty_put_byte(tty->tty_fd, byte);
     }
 }
 
-static void tty_echo_erased_char(muzix_tty_device_t *tty)
-{
+static void
+tty_echo_erased_char(muzix_tty_device_t *tty) {
     muzix_tty_echo(tty, '\b');
     muzix_tty_echo(tty, ' ');
     muzix_tty_echo(tty, '\b');
@@ -33,8 +33,8 @@ static void tty_echo_erased_char(muzix_tty_device_t *tty)
 #define tty_is_erase(tty, byte)                                        \
     ((byte) == 0x08u || (byte) == 0x7Fu || (byte) == (tty)->params.erase)
 
-void muzix_tty_device_init(muzix_tty_device_t *tty)
-{
+void
+muzix_tty_device_init(muzix_tty_device_t *tty) {
     if (!tty) {
         return;
     }
@@ -186,8 +186,8 @@ int muzix_tty_write(muzix_tty_device_t *tty,
     return 0;
 }
 
-static uint16_t muzix_tty_input_pending(muzix_tty_device_t *tty)
-{
+static uint16_t
+muzix_tty_input_pending(muzix_tty_device_t *tty) {
     uint16_t pending = tty->input_length != 0 ? 1u : 0u;
     uint8_t byte;
     int32_t ret = sys_read(tty->tty_fd, &byte, 1);
@@ -197,8 +197,8 @@ static uint16_t muzix_tty_input_pending(muzix_tty_device_t *tty)
     return pending;
 }
 
-int muzix_tty_ioctl(muzix_tty_device_t *tty, uint16_t request, void *argument)
-{
+int
+muzix_tty_ioctl(muzix_tty_device_t *tty, uint16_t request, void *argument) {
     if (!tty || !argument) {
         return -1;
     }

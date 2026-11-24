@@ -1,7 +1,7 @@
 #include "allocator.h"
 
-static int test_allocator(void)
-{
+static int
+test_allocator(void) {
     muzix_fs_zone_allocator_t allocator;
     uint16_t first;
     uint16_t second;
@@ -20,7 +20,7 @@ static int test_allocator(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_allocator();
 }

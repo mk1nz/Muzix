@@ -39,8 +39,8 @@
  * arrangement of its own.
  */
 
-#include <stdint.h>
-#include <string.h>
+#include "ztypes.h"
+#include "libc.h"
 
 #include "../platform/zeta-v2/context_switch.h"
 
@@ -57,13 +57,13 @@ zeta_state_t *g_zeta_state_ptr;
 void muzix_host_user_space_clear(void);
 uint8_t *muzix_host_user_space(void);
 
-void muzix_host_user_space_clear(void)
-{
+void
+muzix_host_user_space_clear(void) {
     memset(g_host_user_space, 0, sizeof(g_host_user_space));
 }
 
-uint8_t *muzix_host_user_space(void)
-{
+uint8_t
+*muzix_host_user_space(void) {
     return g_host_user_space;
 }
 
@@ -160,8 +160,8 @@ void zeta_kernel_exit(zeta_state_t *state,
     (void)state; (void)saved_user_context;
 }
 
-int zeta_load_map(zeta_state_t *state, const process_map_t *map)
-{
+int
+zeta_load_map(zeta_state_t *state, const process_map_t *map) {
     (void)state; (void)map;
     return -1;
 }
@@ -188,17 +188,22 @@ zeta_callback_id_t zeta_callback_from_fn(int (*func)(void *))
     return ZETA_CB_NONE;
 }
 
-void zeta_context_stack_init(void)
-{
+void
+zeta_context_stack_init(void) {
 }
 
-uint8_t zeta_swap_region(zeta_state_t *state, uint8_t region, uint8_t new_page)
-{
+uint8_t
+zeta_swap_region(zeta_state_t *state, uint8_t region, uint8_t new_page) {
     (void)state; (void)region; (void)new_page;
     return 0;
 }
 
-void zeta_restore_region(zeta_state_t *state, uint8_t region, uint8_t old_page)
-{
+void
+zeta_restore_region(zeta_state_t *state, uint8_t region, uint8_t old_page) {
     (void)state; (void)region; (void)old_page;
 }
+
+/* Host stand-in for the kernel-only CTC3 calibration result.
+ * tick_helpers.c reads this to compute the CPU frequency; on the host it
+ * defaults to ~4 MHz (130 counts per 120 Hz tick at 4 MHz / 256). */
+uint16_t muzix_tick_ctc3_counts_per_tick = 130;

@@ -1,7 +1,7 @@
 #ifndef MUZIX_STARTUP_H
 #define MUZIX_STARTUP_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "init_task.h"
 #include "proc_table.h"

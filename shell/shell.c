@@ -10,6 +10,7 @@
 
 #include "../lib/libc.h"
 #include "../lib/syscall.h"
+#include "../lib/socket.h"
 #include "../include/muzix_ipc.h"
 #include "muzix_build_stamp.h"
 
@@ -71,12 +72,12 @@ typedef int (*builtin_cmd)(int argc, char *argv[]);
 /* Forward declarations */
 static int cmd_cd(int argc, char *argv[]);
 static int cmd_pwd(int argc, char *argv[]);
-static int cmd_echo(int argc, char *argv[]);
 static int cmd_exit(int argc, char *argv[]);
 static int cmd_help(int argc, char *argv[]);
+static int cmd_netstat(int argc, char *argv[]);
 
-static void refresh_cwd(void)
-{
+static void
+refresh_cwd(void) {
     if (ipc_getcwd(cwd, sizeof(cwd)) == 0) {
         strcpy(cwd, "/");
     }
@@ -90,15 +91,72 @@ struct builtin {
 static struct builtin builtins[] = {
     {"cd", cmd_cd},
     {"pwd", cmd_pwd},
-    {"echo", cmd_echo},
     {"exit", cmd_exit},
     {"help", cmd_help},
+    {"netstat", cmd_netstat},
     {NULL, NULL}
 };
 
-/* Built-in command implementations */
-static int cmd_cd(int argc, char *argv[])
+/* Built-in: netstat - show W5100 socket status and close diagnostics */
+static int cmd_netstat(int argc, char *argv[])
 {
+    int i;
+    uint8_t sr;
+    int all = 1;
+    int show_hist = 0;
+
+    (void)argc;
+    (void)argv;
+
+    /* Parse optional arguments */
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "hist") == 0) {
+            show_hist = 1;
+        } else {
+            all = 0;
+        }
+    }
+
+    puts("W5100 Socket Status:");
+    for (i = 0; i < 4; i++) {
+        sr = (uint8_t)netstat(i, NETSTAT_SR);
+        puts("  sock ");
+        putchar('0' + i);
+        puts(" sr=0x");
+        putchar('0' + (sr >> 4));
+        putchar('0' + (sr & 0xF));
+        puts("");
+    }
+
+    puts("open_count=");
+    putchar('0' + (uint8_t)netstat(0, NETSTAT_OPEN_COUNT));
+    puts("");
+
+    puts("close_last_result=");
+    putchar('0' + (uint8_t)netstat(0, NETSTAT_CLOSE_RESULT));
+    puts(" iters=");
+    putchar('0' + (uint8_t)netstat(0, NETSTAT_CLOSE_ITERS));
+    puts(" forced=");
+    putchar('0' + (uint8_t)netstat(0, NETSTAT_CLOSE_FORCED));
+    puts(" forced_count=");
+    putchar('0' + (uint8_t)netstat(0, NETSTAT_CLOSE_FORCED_COUNT));
+    puts("");
+
+    if (show_hist) {
+        puts("close_hist:");
+        for (i = 0; i < 5; i++) {
+            puts("  b");
+            putchar('0' + i);
+            puts("=");
+            putchar('0' + (uint8_t)netstat(i, NETSTAT_CLOSE_HIST));
+            puts("");
+        }
+    }
+
+    return 0;
+}
+static int
+cmd_cd(int argc, char *argv[]) {
     if (argc < 2) {
         if (ipc_chdir("/") != 0) {
             puts("cd: cannot change to root");
@@ -116,8 +174,8 @@ static int cmd_cd(int argc, char *argv[])
     return 0;
 }
 
-static int cmd_pwd(int argc, char *argv[])
-{
+static int
+cmd_pwd(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     refresh_cwd();
@@ -125,20 +183,8 @@ static int cmd_pwd(int argc, char *argv[])
     return 0;
 }
 
-static int cmd_echo(int argc, char *argv[])
-{
-    for (int i = 1; i < argc; i++) {
-        printf("%s", argv[i]);
-        if (i < argc - 1) {
-            putchar(' ');
-        }
-    }
-    putchar('\n');
-    return 0;
-}
-
-static int cmd_exit(int argc, char *argv[])
-{
+static int
+cmd_exit(int argc, char *argv[]) {
     int status = 0;
     if (argc > 1) {
         status = atoi(argv[1]);
@@ -147,16 +193,18 @@ static int cmd_exit(int argc, char *argv[])
     return 0;
 }
 
-static int cmd_help(int argc, char *argv[])
-{
+static int
+cmd_help(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     printf("Muzix Shell - command interpreter for Muzix on Z80\n");
     printf("Built-in commands:\n");
     printf("  cd [dir]     - Change directory\n");
     printf("  pwd          - Print working directory\n");
-    printf("  echo [args]  - Print arguments\n");
+    printf("  echo [args]  - Print arguments (external: use echo -d for LCD)\n");
     printf("  help         - Show this help\n");
+    printf("  netstat      - Show W5100 socket status and close diagnostics\n");
+    printf("  netstat hist - Also show close iteration histogram\n");
     printf("  exit [code]  - Exit shell\n\n");
     printf("External commands are executed using fork/exec:\n");
     printf("  ls [dir]    - List directory\n");
@@ -249,9 +297,29 @@ static int execute_external(int argc, char *argv[])
         exit(127);
         return 127;  /* Never reached, but satisfies compiler */
     } else if (pid > 0) {
-        /* Parent process: wait for child */
-        wait(&status);
-        return status;
+        /* Parent process.  Some commands are daemons that run
+         * indefinitely; launching them in the foreground would leave the
+         * shell waiting forever.  httpd is one: bare `httpd` starts it as a
+         * service and returns control to the shell immediately.
+         *
+         * Generic `&` backgrounding is intentionally not supported:
+         * sys_wait() has no non-blocking reap path - it parks indefinitely
+         * when no zombie exists, so a background child that exits would
+         * become an unreaped zombie with no safe way to collect it.
+         * Everything else runs in the foreground and the parent waits until
+         * the child is actually reaped; wait() returns 0 as a placeholder
+         * when woken without reaping, so loop rather than treating 0 as
+         * done. */
+        int is_daemon = (argc > 0 && argv[0] != NULL &&
+                         strcmp(argv[0], "httpd") == 0);
+        if (is_daemon) {
+            return 0;
+        }
+        int ret;
+        do {
+            ret = wait(&status);
+        } while (ret == 0 || (ret > 0 && ret != pid));
+        return ret;
     } else {
         /* Fork failed */
         printf("shell: fork failed\n");

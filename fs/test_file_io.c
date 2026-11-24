@@ -1,6 +1,6 @@
 #include "file_io.h"
 
-#include <string.h>
+#include "libc.h"
 
 /* Where the indirect block starts, and why it is not offset 512.
  *
@@ -40,19 +40,19 @@
 
 static uint8_t disk[MUZIX_FS_BLOCK_SIZE * 4];
 
-static void put16(uint8_t *data, uint16_t value)
-{
+static void
+put16(uint8_t *data, uint16_t value) {
     data[0] = (uint8_t)value;
     data[1] = (uint8_t)(value >> 8);
 }
 
-static uint16_t get16(const uint8_t *data)
-{
+static uint16_t
+get16(const uint8_t *data) {
     return (uint16_t)((uint16_t)data[0] | ((uint16_t)data[1] << 8));
 }
 
-static int read_block(struct muzix_block_device *device, uint16_t block, uint8_t *buffer)
-{
+static int
+read_block(struct muzix_block_device *device, uint16_t block, uint8_t *buffer) {
     (void)device;
     for (uint16_t i = 0; i < MUZIX_FS_BLOCK_SIZE; i++) {
         buffer[i] = disk[block * MUZIX_FS_BLOCK_SIZE + i];
@@ -60,8 +60,8 @@ static int read_block(struct muzix_block_device *device, uint16_t block, uint8_t
     return 0;
 }
 
-static int write_block(struct muzix_block_device *device, uint16_t block, const uint8_t *buffer)
-{
+static int
+write_block(struct muzix_block_device *device, uint16_t block, const uint8_t *buffer) {
     (void)device;
     for (uint16_t i = 0; i < MUZIX_FS_BLOCK_SIZE; i++) {
         disk[block * MUZIX_FS_BLOCK_SIZE + i] = buffer[i];
@@ -69,8 +69,8 @@ static int write_block(struct muzix_block_device *device, uint16_t block, const 
     return 0;
 }
 
-static int test_file_io(void)
-{
+static int
+test_file_io(void) {
     muzix_block_device_t device = {0, read_block, write_block, 4};
     muzix_fs_block_cache_t cache;
     muzix_fs_inode_t inode = {0};
@@ -181,7 +181,7 @@ static int test_file_io(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_file_io();
 }

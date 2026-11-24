@@ -3,8 +3,8 @@
 
 static uint8_t disk[MUZIX_FS_BLOCK_SIZE * 16];
 
-static int read_block(struct muzix_block_device *device, uint16_t block, uint8_t *buffer)
-{
+static int
+read_block(struct muzix_block_device *device, uint16_t block, uint8_t *buffer) {
     (void)device;
     for (uint16_t i = 0; i < MUZIX_FS_BLOCK_SIZE; i++) {
         buffer[i] = disk[block * MUZIX_FS_BLOCK_SIZE + i];
@@ -12,8 +12,8 @@ static int read_block(struct muzix_block_device *device, uint16_t block, uint8_t
     return 0;
 }
 
-static int write_block(struct muzix_block_device *device, uint16_t block, const uint8_t *buffer)
-{
+static int
+write_block(struct muzix_block_device *device, uint16_t block, const uint8_t *buffer) {
     (void)device;
     for (uint16_t i = 0; i < MUZIX_FS_BLOCK_SIZE; i++) {
         disk[block * MUZIX_FS_BLOCK_SIZE + i] = buffer[i];
@@ -21,8 +21,8 @@ static int write_block(struct muzix_block_device *device, uint16_t block, const 
     return 0;
 }
 
-static int test_volume(void)
-{
+static int
+test_volume(void) {
     muzix_block_device_t device = {0, read_block, write_block, 16};
     muzix_fs_volume_t volume;
     muzix_fs_volume_t mounted;
@@ -52,7 +52,7 @@ static int test_volume(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_volume();
 }

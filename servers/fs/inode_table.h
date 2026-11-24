@@ -1,7 +1,7 @@
 #ifndef MUZIX_INODE_TABLE_H
 #define MUZIX_INODE_TABLE_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "fs_types.h"
 

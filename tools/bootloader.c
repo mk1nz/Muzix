@@ -10,7 +10,7 @@
  * The bootloader runs at address 0x0000 (reset vector)
  */
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../platform/zeta-v2/bank_io.h"
 #include "../platform/zeta-v2/uart_io.h"
@@ -32,13 +32,13 @@ typedef void (*boot_serial_writer_t)(char value);
 static boot_sector_reader_t sector_reader;
 static boot_serial_writer_t serial_writer;
 
-void bootloader_set_sector_reader(boot_sector_reader_t reader)
-{
+void
+bootloader_set_sector_reader(boot_sector_reader_t reader) {
     sector_reader = reader;
 }
 
-void bootloader_set_serial_writer(boot_serial_writer_t writer)
-{
+void
+bootloader_set_serial_writer(boot_serial_writer_t writer) {
     serial_writer = writer;
 }
 
@@ -65,8 +65,8 @@ static void serial_init(void)
     }
 }
 
-static void serial_putchar(char c)
-{
+static void
+serial_putchar(char c) {
     if (serial_writer) {
         serial_writer(c);
     } else {
@@ -74,8 +74,8 @@ static void serial_putchar(char c)
     }
 }
 
-static void serial_puts(const char *str)
-{
+static void
+serial_puts(const char *str) {
     while (*str) {
         serial_putchar(*str++);
     }

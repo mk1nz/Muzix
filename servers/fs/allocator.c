@@ -1,6 +1,6 @@
 #include "allocator.h"
 
-#include <string.h>
+#include "libc.h"
 
 static void muzix_fs_zone_mark(muzix_fs_zone_allocator_t *allocator,
                                uint16_t zone,

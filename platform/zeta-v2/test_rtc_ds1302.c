@@ -39,8 +39,8 @@
  * branch where all three of those bugs were.
  */
 
-#include <stdint.h>
-#include <string.h>
+#include "ztypes.h"
+#include "libc.h"
 
 /* z80_outb()/z80_inb() from test_host/z80_io_host.c: where the driver's `out
  * (#0x70),a` and `in a,(#0x70)` go on a host, wired to whatever the test
@@ -83,13 +83,13 @@ static uint8_t g_registers[7];
 #define DECODED_WEEKDAY  3u
 #define DECODED_YEAR    26u
 
-static void chip_write(uint8_t port, uint8_t value)
-{
+static void
+chip_write(uint8_t port, uint8_t value) {
     muzix_host_ds1302_write(port, value);
 }
 
-static uint8_t chip_read(uint8_t port)
-{
+static uint8_t
+chip_read(uint8_t port) {
     return muzix_host_ds1302_read(port);
 }
 
@@ -533,8 +533,8 @@ static int test_a_protected_chip_is_still_settable(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     int rc = test_hour_conversion();
 
     if (rc != 0) {

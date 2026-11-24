@@ -1,25 +1,22 @@
-#include <stddef.h>
-
-size_t strlen(const char *s)
-{
+#include "ztypes.h"
+size_t
+strlen(const char *s) {
     size_t len = 0;
     while (s[len] != '\0') {
         len++;
     }
     return len;
 }
-
-int strcmp(const char *s1, const char *s2)
-{
+int
+strcmp(const char *s1, const char *s2) {
     while (*s1 && *s1 == *s2) {
         s1++;
         s2++;
     }
     return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
 }
-
-int strncmp(const char *s1, const char *s2, size_t n)
-{
+int
+strncmp(const char *s1, const char *s2, size_t n) {
     while (n && *s1 && *s1 == *s2) {
         s1++;
         s2++;
@@ -30,9 +27,8 @@ int strncmp(const char *s1, const char *s2, size_t n)
     }
     return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
 }
-
-void *memcpy(void *dest, const void *src, size_t n)
-{
+void *
+memcpy(void *dest, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dest;
     const unsigned char *s = (const unsigned char *)src;
     while (n--) {
@@ -40,9 +36,8 @@ void *memcpy(void *dest, const void *src, size_t n)
     }
     return dest;
 }
-
-void *memset(void *s, int c, size_t n)
-{
+void *
+memset(void *s, int c, size_t n) {
     unsigned char *p = (unsigned char *)s;
     while (n--) {
         *p++ = (unsigned char)c;
@@ -50,8 +45,8 @@ void *memset(void *s, int c, size_t n)
     return s;
 }
 
-int memcmp(const void *s1, const void *s2, size_t n)
-{
+int
+memcmp(const void *s1, const void *s2, size_t n) {
     const unsigned char *c1 = (const unsigned char *)s1;
     const unsigned char *c2 = (const unsigned char *)s2;
     while (n--) {
@@ -64,8 +59,8 @@ int memcmp(const void *s1, const void *s2, size_t n)
     return 0;
 }
 
-void *memmove(void *dest, const void *src, size_t n)
-{
+void *
+memmove(void *dest, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dest;
     const unsigned char *s = (const unsigned char *)src;
     if (d < s) {
@@ -82,8 +77,8 @@ void *memmove(void *dest, const void *src, size_t n)
     return dest;
 }
 
-char *strcat(char *dest, const char *src)
-{
+char *
+strcat(char *dest, const char *src) {
     char *ptr = dest;
     while (*ptr) {
         ptr++;
@@ -95,8 +90,8 @@ char *strcat(char *dest, const char *src)
     return dest;
 }
 
-char *strrchr(const char *s, int c)
-{
+char *
+strrchr(const char *s, int c) {
     char *found = NULL;
     while (*s) {
         if (*s == (char)c) {

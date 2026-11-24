@@ -1,9 +1,9 @@
 #include "mproc_model.h"
 
-#include <string.h>
+#include "libc.h"
 
-static uint8_t muzix_page_from_phys(uint32_t phys)
-{
+static uint8_t
+muzix_page_from_phys(uint32_t phys) {
     return (uint8_t)(phys >> 14);
 }
 
@@ -52,8 +52,8 @@ void muzix_mproc_set_seg(muzix_mproc_t *mp,
     mp->mp_seg[seg].mem_len = len;
 }
 
-void muzix_mproc_set_all_segs(muzix_mproc_t *mp, const muzix_seg_pages_t *pages)
-{
+void
+muzix_mproc_set_all_segs(muzix_mproc_t *mp, const muzix_seg_pages_t *pages) {
     if (!mp || !pages) {
         return;
     }
@@ -109,8 +109,8 @@ uint16_t muzix_mproc_umap(const muzix_mproc_t *mp,
     return (uint16_t)(base + vir_addr - m->mem_vir);
 }
 
-void muzix_mproc_to_zeta_map(const muzix_mproc_t *mp, process_map_t *out)
-{
+void
+muzix_mproc_to_zeta_map(const muzix_mproc_t *mp, process_map_t *out) {
     process_map_t tmp = {{0x20, 0x21, 0x22, 0x23}};
 
     if (!mp || !out) {

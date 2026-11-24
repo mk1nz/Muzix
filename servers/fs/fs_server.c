@@ -13,7 +13,7 @@
 #include "../../fs/tty_device.h"
 #include "../../platform/zeta-v2/uart_io.h"
 #include "fs_clock.h"
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_FS_PATH_MAX 64u
 
@@ -38,8 +38,8 @@ static muzix_tty_device_t g_fs_tty;
 
 static char g_fs_cwd[MUZIX_FS_PATH_MAX] = "/";
 
-static int fs_is_console_fd(int fd)
-{
+static int
+fs_is_console_fd(int fd) {
     return fd == 0 || fd == 1 || fd == 2;
 }
 
@@ -668,18 +668,18 @@ static void fs_tty_send(uint8_t byte, void *userdata)
     muzix_zeta_uart_send(byte, userdata);
 }
 
-static uint8_t fs_tty_recv(void *userdata)
-{
+static uint8_t
+fs_tty_recv(void *userdata) {
     return muzix_zeta_uart_recv(userdata);
 }
 
-static uint8_t fs_tty_available(void *userdata)
-{
+static uint8_t
+fs_tty_available(void *userdata) {
     return muzix_zeta_uart_available(userdata);
 }
 
-static void fs_server_init_console(void)
-{
+static void
+fs_server_init_console(void) {
     muzix_tty_device_init(&g_fs_tty);
     muzix_tty_device_set_callbacks(&g_fs_tty,
                                    fs_tty_send,

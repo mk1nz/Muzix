@@ -1,6 +1,6 @@
 #include "fs_service.h"
 
-#include <string.h>
+#include "libc.h"
 #include "../platform/zeta-v2/uart_io.h"
 #include "../platform/zeta-v2/trace.h"
 
@@ -400,8 +400,8 @@ static int muzix_fs_service_scratch_acquire(muzix_fs_service_t *fs)
     return 0;
 }
 
-static void muzix_fs_service_scratch_release(muzix_fs_service_t *fs)
-{
+static void
+muzix_fs_service_scratch_release(muzix_fs_service_t *fs) {
     if (fs) {
         fs->scratch_busy = 0;
     }
@@ -585,8 +585,8 @@ static int muzix_fs_service_open_inode(muzix_fs_service_t *fs,
     return -1;
 }
 
-int muzix_fs_service_dup(muzix_fs_service_t *fs, int handle)
-{
+int
+muzix_fs_service_dup(muzix_fs_service_t *fs, int handle) {
     muzix_fs_open_description_t *description;
     uint8_t slot;
 
@@ -606,8 +606,8 @@ int muzix_fs_service_dup(muzix_fs_service_t *fs, int handle)
     return -1;
 }
 
-int muzix_fs_service_open_tty(muzix_fs_service_t *fs)
-{
+int
+muzix_fs_service_open_tty(muzix_fs_service_t *fs) {
     uint8_t slot;
     uint8_t description;
 
@@ -652,8 +652,8 @@ int muzix_fs_service_ioctl(muzix_fs_service_t *fs,
     return muzix_tty_ioctl(fs->tty, request, argument);
 }
 
-int muzix_fs_service_pipe(muzix_fs_service_t *fs, int fds[2])
-{
+int
+muzix_fs_service_pipe(muzix_fs_service_t *fs, int fds[2]) {
     uint8_t pipe_slot;
     uint8_t description_a = MUZIX_FS_OPEN_DESCRIPTIONS;
     uint8_t description_b = MUZIX_FS_OPEN_DESCRIPTIONS;
@@ -965,8 +965,8 @@ done:
     return status;
 }
 
-int muzix_fs_service_chdir(muzix_fs_service_t *fs, const char *path)
-{
+int
+muzix_fs_service_chdir(muzix_fs_service_t *fs, const char *path) {
     muzix_fs_inode_t *entry;
     uint16_t inode;
     char normalized[MUZIX_FS_PATH_MAX];
@@ -1059,8 +1059,8 @@ static int muzix_fs_service_reclaim_inode(muzix_fs_service_t *fs,
     return muzix_fs_inode_release(&fs->volume->inodes, inode);
 }
 
-int muzix_fs_service_close(muzix_fs_service_t *fs, int handle)
-{
+int
+muzix_fs_service_close(muzix_fs_service_t *fs, int handle) {
     muzix_fs_open_description_t *description;
     uint16_t inode;
     int flush_needed;
@@ -1695,8 +1695,8 @@ int muzix_fs_service_access_path(muzix_fs_service_t *fs,
     return (available & requested) == requested ? 0 : -1;
 }
 
-int muzix_fs_service_sync(muzix_fs_service_t *fs)
-{
+int
+muzix_fs_service_sync(muzix_fs_service_t *fs) {
     if (!fs || !fs->volume || !fs->volume->mounted) {
         return -1;
     }

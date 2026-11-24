@@ -1,0 +1,8 @@
+// Kilo project configuration
+// ub-mode is the default skill — applied to every code change
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "skills": {
+    "paths": [".kilo/skills"]
+  }
+}

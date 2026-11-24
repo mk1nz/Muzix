@@ -1,7 +1,7 @@
 #ifndef MUZIX_BOOTSTRAP_H
 #define MUZIX_BOOTSTRAP_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "runtime_state.h"
 

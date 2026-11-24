@@ -1,9 +1,9 @@
 #include "directory.h"
 
-#include <string.h>
+#include "libc.h"
 
-static int muzix_fs_name_valid(const char *name)
-{
+static int
+muzix_fs_name_valid(const char *name) {
     size_t length;
 
     if (!name || !name[0]) {
@@ -14,8 +14,8 @@ static int muzix_fs_name_valid(const char *name)
     return length <= MUZIX_FS_NAME_MAX;
 }
 
-void muzix_fs_directory_init(muzix_fs_directory_t *directory)
-{
+void
+muzix_fs_directory_init(muzix_fs_directory_t *directory) {
     if (directory) {
         memset(directory, 0, sizeof(*directory));
     }

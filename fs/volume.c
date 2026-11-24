@@ -1,6 +1,6 @@
 #include "volume.h"
 
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_FS_ALLOCATOR_BLOCK 2u
 #define MUZIX_FS_INODE_BLOCK 3u
@@ -41,8 +41,8 @@ void muzix_fs_volume_init(muzix_fs_volume_t *volume,
     muzix_fs_superblock_init(&volume->superblock, &volume->cache);
 }
 
-int muzix_fs_volume_flush(muzix_fs_volume_t *volume)
-{
+int
+muzix_fs_volume_flush(muzix_fs_volume_t *volume) {
     if (!volume || !volume->mounted) {
         return -1;
     }
@@ -110,8 +110,8 @@ int muzix_fs_volume_format(muzix_fs_volume_t *volume,
 }
 #endif /* MUZIX_ENABLE_FORMAT */
 
-int muzix_fs_volume_mount(muzix_fs_volume_t *volume)
-{
+int
+muzix_fs_volume_mount(muzix_fs_volume_t *volume) {
     if (!volume || !volume->device) {
         return -1;
     }

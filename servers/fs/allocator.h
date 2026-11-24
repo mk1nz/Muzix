@@ -1,7 +1,7 @@
 #ifndef MUZIX_FS_ALLOCATOR_H
 #define MUZIX_FS_ALLOCATOR_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #define MUZIX_FS_MAX_ZONES 256u
 

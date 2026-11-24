@@ -1,0 +1,17 @@
+; Cron Server linker script
+-mjwx
+-b _CODE = 0x8000
+-i cron_server.ihx
+../../lib/server_crt0.rel
+cron_server.rel
+../../lib/server.rel
+../../lib/math.rel
+../../lib/sdcc_runtime.rel
+-k ../../lib
+-l libc.lib
+-k ../../lib
+-l syscall.lib
+../../lib/user_syscall.rel
+../../zeta_uart_io.rel
+../../tick.rel
+-e

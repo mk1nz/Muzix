@@ -1,9 +1,13 @@
 #ifndef MUZIX_Z80_IO_H
 #define MUZIX_Z80_IO_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 void z80_outb(uint8_t port, uint8_t value);
+
+/* Read from a Z80 port. Used for PPI input (e.g., I2C bus state check).
+ * Note: bank selector ports ($78-$7B) are write-only and must never be read. */
+uint8_t z80_inb(uint8_t port);
 
 /* Compiler memory barrier to prevent reordering of memory accesses across
  * bank register writes. Use before reading from window 3 (_DATA) after

@@ -1,8 +1,7 @@
 #ifndef MUZIX_FS_FILE_IO_H
 #define MUZIX_FS_FILE_IO_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "block_cache.h"
 #include "allocator.h"

@@ -1,7 +1,7 @@
 #include "context_switch.h"
 
-void zeta_init_process_table(zeta_process_table_t *table, const process_map_t *kernel_map)
-{
+void
+zeta_init_process_table(zeta_process_table_t *table, const process_map_t *kernel_map) {
     int i;
     if (!table) {
         return;
@@ -28,8 +28,8 @@ void zeta_init_process_table(zeta_process_table_t *table, const process_map_t *k
     }
 }
 
-void zeta_set_process_map(zeta_process_table_t *table, int slot, const process_map_t *map, uint8_t pid)
-{
+void
+zeta_set_process_map(zeta_process_table_t *table, int slot, const process_map_t *map, uint8_t pid) {
     if (!table || !map || slot < 0 || slot >= ZETA_MAX_PROCS) {
         return;
     }
@@ -39,8 +39,8 @@ void zeta_set_process_map(zeta_process_table_t *table, int slot, const process_m
     table->slots[slot].map = *map;
 }
 
-void zeta_switch_to_process(zeta_state_t *state, zeta_process_table_t *table, int slot)
-{
+void
+zeta_switch_to_process(zeta_state_t *state, zeta_process_table_t *table, int slot) {
     if (!state || !table || slot < 0 || slot >= ZETA_MAX_PROCS) {
         return;
     }
@@ -58,8 +58,8 @@ void zeta_switch_to_process(zeta_state_t *state, zeta_process_table_t *table, in
     zeta_map_process(state, &table->slots[slot].map);
 }
 
-void zeta_switch_to_kernel(zeta_state_t *state, zeta_process_table_t *table)
-{
+void
+zeta_switch_to_kernel(zeta_state_t *state, zeta_process_table_t *table) {
     if (!state || !table) {
         return;
     }

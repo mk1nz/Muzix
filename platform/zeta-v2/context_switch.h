@@ -1,7 +1,7 @@
 #ifndef MUZIX_ZETA_CONTEXT_SWITCH_H
 #define MUZIX_ZETA_CONTEXT_SWITCH_H
 
-#include <stdint.h>
+#include "ztypes.h"
 #include "test_kernel/bank_model.h"
 
 /* Opaque saved context for kernel entry/exit */

@@ -90,8 +90,8 @@
 ; address lands at 0xFFEA (just under SYSCALL_SP), and the kernel stack below
 ; that is reachable in one push.  Keeping the user SP beside the other cells
 ; rather than in a distant "gap" is what makes the two files able to agree.
-SYSCALL_USER_SP  = 0xFFFC        ; the PROCESS's SP; MUST equal z80_io.s's 0xFFFC
-SYSCALL_ARGS     = 0xFFF0        ; six words, copied off the process stack
+SYSCALL_USER_SP  = 0xFFFE        ; the PROCESS's SP; MUST equal z80_io.s's 0xFFFE
+SYSCALL_ARGS     = 0xFFF0        ; 14 bytes, copied off the process stack
 SYSCALL_NUMBER   = 0xFFEE        ; low byte of num, plus a pad byte
 SYSCALL_SP       = 0xFFEC        ; handler stack pointer; the call lands at 0xFFEA
 
@@ -274,7 +274,7 @@ fork_stack_done:
     ld      hl, #2
     add     hl, sp
     ld      de, #SYSCALL_ARGS
-    ld      bc, #12
+    ld      bc, #14
     ldir
 
     ld      sp, #SYSCALL_SP      ; kernel stack, below every cell above
@@ -295,13 +295,21 @@ fork_stack_done:
      ; The mirror in _muzix_live_banks is window 0, so it can be read afterwards
      ; to publish the map we displaced into the _DATA cell the exit path restores.
      ld      a, #0x20
-     out     (0x78), a
+     ld      c, #0x78
+     ld      b, #0
+     out     (c), a
      ld      a, #0x21
-     out     (0x79), a
+     ld      c, #0x79
+     ld      b, #0
+     out     (c), a
      ld      a, #0x22
-     out     (0x7A), a
+     ld      c, #0x7A
+     ld      b, #0
+     out     (c), a
      ld      a, #0x23
-     out     (0x7B), a
+     ld      c, #0x7B
+     ld      b, #0
+     out     (c), a
 
       ; Trace: syscall entry - the trace-buffer copy.  This is the only mark the
       ; trap leaves, and it goes to the ring buffer rather than to the UART:

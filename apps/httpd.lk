@@ -1,0 +1,18 @@
+-mjwx
+-i httpd.ihx
+-b _CODE = 0x8000
+; _DATA is placed immediately after _CODE by the linker default
+../lib/crt0.rel
+httpd.rel
+http_parser.rel
+../lib/math.rel
+../lib/sdcc_runtime.rel
+-k ../lib
+-l socket.lib
+-k ../lib
+-l syscall.lib
+../lib/user_syscall.rel
+../lib/z80_io.rel
+../zeta_uart_io.rel
+../tick.rel
+-e

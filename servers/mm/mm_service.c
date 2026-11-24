@@ -1,6 +1,6 @@
 #include "mm_service.h"
 #include "syscall.h"
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_SVC_ALLOC_PAGE  100
 #define MUZIX_SVC_FREE_PAGE   101
@@ -15,8 +15,8 @@
 
 #define MUZIX_IPC_MM 2
 
-void muzix_mm_service_init(muzix_mm_service_t *mm, uint8_t server_id)
-{
+void
+muzix_mm_service_init(muzix_mm_service_t *mm, uint8_t server_id) {
     if (!mm) return;
     mm->server_id = server_id;
     mm->kernel_map.pages[0] = 0x20;
@@ -25,8 +25,8 @@ void muzix_mm_service_init(muzix_mm_service_t *mm, uint8_t server_id)
     mm->kernel_map.pages[3] = 0x23;
 }
 
-static int mm_ipc_call(muzix_mm_service_t *mm, uint8_t type, void *msg, size_t msg_size)
-{
+static int
+mm_ipc_call(muzix_mm_service_t *mm, uint8_t type, void *msg, size_t msg_size) {
     (void)mm;
     (void)type;
     (void)msg;
@@ -36,8 +36,8 @@ static int mm_ipc_call(muzix_mm_service_t *mm, uint8_t type, void *msg, size_t m
     return -1;
 }
 
-int muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page)
-{
+int
+muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page) {
     uint8_t result_page;
     int result;
     
@@ -51,20 +51,20 @@ int muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page)
     return -1;
 }
 
-void muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page)
-{
+void
+muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page) {
     if (!mm) return;
     mm_ipc_call(mm, MUZIX_SVC_FREE_PAGE, &page, sizeof(page));
 }
 
-void muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_map)
-{
+void
+muzix_mm_memory_init(muzix_mm_service_t *mm, const process_map_t *kernel_map) {
     if (!mm || !kernel_map) return;
     mm->kernel_map = *kernel_map;
 }
 
-int muzix_mm_newmap(muzix_mm_service_t *mm, uint8_t proc_slot, uint16_t map_ptr)
-{
+int
+muzix_mm_newmap(muzix_mm_service_t *mm, uint8_t proc_slot, uint16_t map_ptr) {
     struct {
         uint8_t proc_slot;
         uint16_t map_ptr;
@@ -261,18 +261,18 @@ int muzix_mm_copy_rom_page_to_kernel(muzix_mm_service_t *mm,
     return result;
 }
 
-void muzix_mm_refresh_visible(muzix_mm_service_t *mm)
-{
+void
+muzix_mm_refresh_visible(muzix_mm_service_t *mm) {
     if (!mm) return;
     mm_ipc_call(mm, MUZIX_SVC_REFRESH, NULL, 0);
 }
 
-void *muzix_mm_service_create(void)
-{
+void
+*muzix_mm_service_create(void) {
     return 0;
 }
 
-void muzix_mm_service_destroy(void *mm)
-{
+void
+muzix_mm_service_destroy(void *mm) {
     (void)mm;
 }

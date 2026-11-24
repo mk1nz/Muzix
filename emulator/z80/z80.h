@@ -2,8 +2,7 @@
 #define Z80_Z80_H_
 
 #include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include "ztypes.h"
 
 typedef struct z80 z80;
 struct z80 {

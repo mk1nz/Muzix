@@ -1,7 +1,7 @@
 #ifndef MUZIX_CONTEXT_SWITCH_H
 #define MUZIX_CONTEXT_SWITCH_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "bank_model.h"
 

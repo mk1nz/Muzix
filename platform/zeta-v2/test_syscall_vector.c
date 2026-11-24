@@ -1,7 +1,7 @@
 #include "syscall_vector.h"
 
-static int test_syscall_vector(void)
-{
+static int
+test_syscall_vector(void) {
     uint8_t memory[0x100];
     uint16_t entry = 0x4567u;
 
@@ -20,7 +20,7 @@ static int test_syscall_vector(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_syscall_vector();
 }

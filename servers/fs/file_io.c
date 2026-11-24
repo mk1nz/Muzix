@@ -1,13 +1,13 @@
 #include "file_io.h"
 
-#include <string.h>
+#include "libc.h"
 
-static int muzix_fs_file_zone(muzix_fs_block_cache_t *cache,
-                              const muzix_fs_inode_t *inode,
-                              uint32_t position,
-                              uint16_t *zone,
-                              uint16_t *offset)
-{
+static int
+muzix_fs_file_zone(muzix_fs_block_cache_t *cache,
+                   const muzix_fs_inode_t *inode,
+                   uint32_t position,
+                   uint16_t *zone,
+                   uint16_t *offset) {
     uint32_t index;
     if (!inode || !zone || !offset) {
         return -1;
@@ -42,13 +42,13 @@ static int muzix_fs_file_zone(muzix_fs_block_cache_t *cache,
     return 0;
 }
 
-static int muzix_fs_file_zone_alloc(muzix_fs_block_cache_t *cache,
-                                    muzix_fs_zone_allocator_t *allocator,
-                                    muzix_fs_inode_t *inode,
-                                    uint32_t position,
-                                    uint16_t *zone,
-                                    uint16_t *offset)
-{
+static int
+muzix_fs_file_zone_alloc(muzix_fs_block_cache_t *cache,
+                         muzix_fs_zone_allocator_t *allocator,
+                         muzix_fs_inode_t *inode,
+                         uint32_t position,
+                         uint16_t *zone,
+                         uint16_t *offset) {
     uint32_t index = position / MUZIX_FS_BLOCK_SIZE;
     uint8_t *indirect;
     /* 32-bit block index: see muzix_fs_file_zone.  A position beyond the
@@ -98,13 +98,13 @@ static int muzix_fs_file_zone_alloc(muzix_fs_block_cache_t *cache,
     return 0;
 }
 
-int muzix_fs_file_read(muzix_fs_block_cache_t *cache,
-                        const muzix_fs_inode_t *inode,
-                        uint32_t position,
-                        uint8_t *buffer,
-                        size_t length,
-                        size_t *result)
-{
+int
+muzix_fs_file_read(muzix_fs_block_cache_t *cache,
+                   const muzix_fs_inode_t *inode,
+                   uint8_t *buffer,
+                   uint32_t position,
+                   size_t length,
+                   size_t *result) {
     size_t done = 0;
     if (result) {
         *result = 0;
@@ -140,25 +140,25 @@ int muzix_fs_file_read(muzix_fs_block_cache_t *cache,
     return 0;
 }
 
-int muzix_fs_file_write(muzix_fs_block_cache_t *cache,
-                        muzix_fs_inode_t *inode,
-                        uint32_t position,
-                        const uint8_t *buffer,
-                        size_t length,
-                        size_t *result)
-{
+int
+muzix_fs_file_write(muzix_fs_block_cache_t *cache,
+                    muzix_fs_inode_t *inode,
+                    uint32_t position,
+                    const uint8_t *buffer,
+                    size_t length,
+                    size_t *result) {
     return muzix_fs_file_write_alloc(cache, 0, inode, position,
                                      buffer, length, result);
 }
 
-int muzix_fs_file_write_alloc(muzix_fs_block_cache_t *cache,
-                              muzix_fs_zone_allocator_t *allocator,
-                              muzix_fs_inode_t *inode,
-                              uint32_t position,
-                              const uint8_t *buffer,
-                              size_t length,
-                              size_t *result)
-{
+int
+muzix_fs_file_write_alloc(muzix_fs_block_cache_t *cache,
+                          muzix_fs_zone_allocator_t *allocator,
+                          muzix_fs_inode_t *inode,
+                          uint32_t position,
+                          const uint8_t *buffer,
+                          size_t length,
+                          size_t *result) {
     size_t done = 0;
     if (result) {
         *result = 0;
@@ -174,8 +174,8 @@ int muzix_fs_file_write_alloc(muzix_fs_block_cache_t *cache,
         size_t chunk;
         if ((allocator ? muzix_fs_file_zone_alloc(cache, allocator, inode,
                                position + done, &zone, &offset)
-                   : muzix_fs_file_zone(cache, inode, position + done,
-                            &zone, &offset)) != 0 ||
+                       : muzix_fs_file_zone(cache, inode, position + done,
+                                &zone, &offset)) != 0 ||
             muzix_fs_cache_get(cache, zone, &data) != 0) {
             return -1;
         }

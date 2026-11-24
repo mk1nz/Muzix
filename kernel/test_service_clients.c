@@ -43,7 +43,7 @@
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_service_clients();
 }

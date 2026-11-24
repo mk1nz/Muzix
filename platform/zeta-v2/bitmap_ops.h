@@ -1,7 +1,7 @@
 #ifndef MUZIX_BITMAP_OPS_H
 #define MUZIX_BITMAP_OPS_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 /* The page allocator's bitmap scan and clear, in platform/zeta-v2/bitmap_ops.s.
  *

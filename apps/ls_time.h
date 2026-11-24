@@ -1,7 +1,7 @@
 #ifndef LS_TIME_H
 #define LS_TIME_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 /*
  * ls_time.h - epoch-to-text conversion for the `ls` app's long format.

@@ -22,9 +22,9 @@
  * the contract lives.
  */
 
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
+#include "libc.h"
+#include "libc.h"
+#include "libc.h"
 
 #include "tick.h"
 
@@ -47,8 +47,8 @@ extern void muzix_host_tick_advance(uint16_t ticks);
 
 static int failures;
 
-static void check(int ok, int id, const char *what)
-{
+static void
+check(int ok, int id, const char *what) {
     if (!ok) {
         printf("FAIL %d: %s\n", id, what);
         failures++;
@@ -115,8 +115,8 @@ static unsigned long read_equ(const char *text, const char *name, int *found)
 }
 
 
-static char *slurp(const char *path)
-{
+static char
+*slurp(const char *path) {
     static char buf[65536];
     FILE *f = fopen(path, "rb");
     size_t n;
@@ -130,8 +130,8 @@ static char *slurp(const char *path)
     return buf;
 }
 
-static void test_divisor_arithmetic(void)
-{
+static void
+test_divisor_arithmetic(void) {
     const char *path = "platform/zeta-v2/tick.s";
     char *text = slurp(path);
     int have_tc_tick = 0;
@@ -452,6 +452,45 @@ static void test_process_accounting(void)
               "a 65535-tick charge across the counter's own 16-bit wrap is "
               "0x1FFFF, and reading it as 0xFFFF would silently halve it");
     }
+
+    /* The rollover boundary: counter at 0x00FF, where a torn read between
+     * the low and high byte would return 0x01FF instead of 0x00FF. */
+    {
+        uint16_t roll_stamp;
+
+        muzix_host_tick_set(0x00FF);
+        muzix_tick_stamp_store(&roll_stamp);
+        check(roll_stamp == 0x00FFu, 50,
+              "stamp_store at 0x00FF reads the rolled boundary correctly");
+
+        /* charge exactly one tick starting from now = 0x00FF */
+        {
+            uint32_t roll_user = 0;
+            uint16_t roll_stamp2 = 0;
+            muzix_host_tick_set(0x00FF);
+            muzix_tick_stamp_store(&roll_stamp2);
+            muzix_host_tick_advance(1);
+            muzix_tick_add_process_time(&roll_user, &roll_stamp2);
+            check(roll_user == 1u, 51,
+                  "one tick charged across the 0x00FF boundary");
+            check(roll_stamp2 == 0x0100u, 52,
+                  "stamp follows the charge past 0x00FF");
+        }
+
+        /* charge exactly 256 ticks starting from now = 0x0000 */
+        {
+            uint32_t roll_user2 = 0;
+            uint16_t roll_stamp3 = 0;
+            muzix_host_tick_set(0x0000);
+            muzix_tick_stamp_store(&roll_stamp3);
+            muzix_host_tick_advance(256);
+            muzix_tick_add_process_time(&roll_user2, &roll_stamp3);
+            check(roll_user2 == 256u, 53,
+                  "256 ticks charged from 0x0000 lands at 0x0100");
+            check(roll_stamp3 == 0x0100u, 54,
+                  "stamp follows the 256-tick charge to 0x0100");
+        }
+    }
 }
 
 /* ---- the real assembly, run --------------------------------------------
@@ -530,8 +569,8 @@ static int test_the_real_assembly(const char *argv0)
     return 1;
 }
 
-int main(int argc, char **argv)
-{
+int
+main(int argc, char **argv) {
     (void)argc;
     test_divisor_arithmetic();
     test_deadline();

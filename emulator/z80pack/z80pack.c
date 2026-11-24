@@ -12,9 +12,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include "ztypes.h"
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -24,6 +28,12 @@
 #define ZETA_ROM_PAGE_MAX       0x1F
 #define ZETA_RAM_PAGE_MIN       0x20
 #define ZETA_RAM_PAGE_MAX       0x3F
+
+/* High-water mark of the kernel stack, for tools/check_kernel_stack.rb.
+ * The kernel stack is `ld sp,#0xFFFE` and grows down; user stacks live in
+ * window 1 (0x4000-0x7FFF), so tracking SP >= 0xC000 isolates kernel usage.
+ * 0xFFFF means "no kernel-mode instruction yet". */
+uint16_t g_min_kernel_sp = 0xFFFF;
 
 /* Z80 CPU core from superzazu/z80 */
 #include "../z80/z80.h"
@@ -46,14 +56,17 @@ static void z80pack_ctc_tick(z80pack_t* pack);
 static void z80pack_rtc_begin_transfer(z80pack_t* pack, uint8_t cmd);
 static void z80pack_rtc_latch_write(z80pack_t* pack, uint8_t val);
 static uint8_t z80pack_mapped_bank(z80pack_t* pack, uint16_t addr);
+static void z80pack_tcp_init_listen_sockets(z80pack_t* pack);
+static void z80pack_tcp_deliver_rx(z80pack_t* pack, int sock);
+static void z80pack_tcp_poll(z80pack_t* pack);
 
-static uint8_t to_bcd(uint8_t v)
-{
+static uint8_t
+to_bcd(uint8_t v) {
     return (uint8_t)(((v / 10U) << 4) | (v % 10U));
 }
 
-static void z80pack_rtc_build_clock(z80pack_t* pack)
-{
+static void
+z80pack_rtc_build_clock(z80pack_t* pack) {
     time_t now = time(NULL);
     struct tm tm_now;
 #if defined(_POSIX_VERSION)
@@ -76,8 +89,8 @@ static void z80pack_rtc_build_clock(z80pack_t* pack)
     pack->rtc_read_buf[7] = 0x00; /* Write-protect register */
 }
 
-static void z80pack_rtc_begin_transfer(z80pack_t* pack, uint8_t cmd)
-{
+static void
+z80pack_rtc_begin_transfer(z80pack_t* pack, uint8_t cmd) {
     pack->rtc_read_mode = (cmd & 0x01U) ? true : false;
     pack->rtc_write_mode = !pack->rtc_read_mode;
     pack->rtc_read_pos = 0;
@@ -108,8 +121,8 @@ static void z80pack_rtc_begin_transfer(z80pack_t* pack, uint8_t cmd)
     }
 }
 
-static void z80pack_rtc_latch_write(z80pack_t* pack, uint8_t val)
-{
+static void
+z80pack_rtc_latch_write(z80pack_t* pack, uint8_t val) {
     bool new_ce = (val & Z80PACK_DSRTC_CE) != 0;
     bool new_clk = (val & Z80PACK_DSRTC_CLK) != 0;
     bool data_out = (val & Z80PACK_DSRTC_DATA) != 0;
@@ -318,8 +331,8 @@ static void z80pack_ctc_recompute(z80pack_t* pack)
     }
 }
 
-static void z80pack_ctc_tick(z80pack_t* pack)
-{
+static void
+z80pack_ctc_tick(z80pack_t* pack) {
     uint8_t ch;
     for (ch = 0; ch < 4; ch++) {
         /* ZETA V2 emulation model:
@@ -386,7 +399,7 @@ static void z80pack_ctc_tick(z80pack_t* pack)
      * clock-halt bit and simply does nothing while it is set, exactly as the
      * hardware would. */
     {
-        const uint64_t cycles_per_second = 7372800;
+        const uint64_t cycles_per_second = 4000000;
         if (!pack->rtc_started) {
             ds1302_init();
             pack->rtc_started = 1;
@@ -415,25 +428,13 @@ const char* z80pack_get_version(void)
  * Z80 Callbacks
  * ============================================================================ */
 
-static uint8_t z80pack_z80_read_byte(void* userdata, uint16_t addr)
-{
+static uint8_t
+z80pack_z80_read_byte(void* userdata, uint16_t addr) {
     z80pack_t* pack = (z80pack_t*)userdata;
     if (!pack) return 0xFF;
     
     pack->memory_reads++;
-    
-    /* Debug: trace reads from 0x4260 (_tty_init) */
-    if (addr == 0x4260 && pack->verbose) {
-        fprintf(stderr, "[DEBUG] Read from 0x4260: banks=[%02X,%02X,%02X,%02X], visible_ram=0x%02X, ram[0x4260]=0x%02X (PC=0x%04X, SP=0x%04X, A=0x%02X, BC=0x%04X, DE=0x%04X, HL=0x%04X, IX=0x%04X, IY=0x%04X)\n",
-                pack->bank_reg[0], pack->bank_reg[1], pack->bank_reg[2], pack->bank_reg[3],
-                pack->visible_ram[0x4260], pack->ram[0x4260],
-                pack->cpu->pc, pack->cpu->sp, pack->cpu->a,
-                (pack->cpu->b << 8) | pack->cpu->c,
-                (pack->cpu->d << 8) | pack->cpu->e,
-                (pack->cpu->h << 8) | pack->cpu->l,
-                pack->cpu->ix, pack->cpu->iy);
-    }
-    
+
     /* Do not alias 0x0068-0x006F as MMIO UART on memory reads.
      * MUZIX boot ROM executes code in this region; UART is port-mapped. */
     
@@ -445,8 +446,8 @@ static uint8_t z80pack_z80_read_byte(void* userdata, uint16_t addr)
     return pack->visible_ram[addr];
 }
 
-static void z80pack_z80_write_byte(void* userdata, uint16_t addr, uint8_t val)
-{
+static void
+z80pack_z80_write_byte(void* userdata, uint16_t addr, uint8_t val) {
     z80pack_t* pack = (z80pack_t*)userdata;
     if (!pack) return;
     
@@ -467,8 +468,8 @@ static void z80pack_z80_write_byte(void* userdata, uint16_t addr, uint8_t val)
          * common_mem by z80pack_update_visible_ram() and z80pack_update_bank().
          * Two writers for one range is how the earlier "process page shows up
          * in window 3" confusion started; one owner is the whole fix. */
-        pack->common_mem[addr - Z80PACK_COMMON_BASE] = val;
-        return;
+          pack->common_mem[addr - Z80PACK_COMMON_BASE] = val;
+         return;
     }
     
     /* A store into a window that maps ROM (pages 0x00-0x1F) or unmapped space
@@ -487,11 +488,9 @@ static void z80pack_z80_write_byte(void* userdata, uint16_t addr, uint8_t val)
         }
     }
 
-    pack->visible_ram[addr] = val;
+     pack->visible_ram[addr] = val;
 
     /* --watchw ADDR: report any store to ADDR with the PC that made it. Used
-     * to find what overwrites a kernel _DATA cell; the kernel has no way to
-     * defend a cell it does not know is being written. */
     if (addr == pack->watch_waddr && pack->watch_whits < 12) {
         pack->watch_whits++;
         printf("[store %04X] <- %02X  from PC=%04X SP=%04X banks=%02X %02X %02X %02X\n",
@@ -499,12 +498,6 @@ static void z80pack_z80_write_byte(void* userdata, uint16_t addr, uint8_t val)
                pack->bank_reg[0], pack->bank_reg[1],
                pack->bank_reg[2], pack->bank_reg[3]);
         fflush(stdout);
-    }
-
-    /* Debug: trace writes to 0x4260 */
-    if (addr == 0x4260 && pack->verbose) {
-        fprintf(stderr, "[WRITE] 0x4260 = 0x%02X (PC=0x%04X, banks=[%02X,%02X,%02X,%02X])\n",
-                val, pack->cpu->pc, pack->bank_reg[0], pack->bank_reg[1], pack->bank_reg[2], pack->bank_reg[3]);
     }
 
     /* Write to underlying RAM bank for RAM pages (0x20-0x3F). */
@@ -521,8 +514,8 @@ static void z80pack_z80_write_byte(void* userdata, uint16_t addr, uint8_t val)
     }
 }
 
-static uint8_t z80pack_z80_port_in(z80* z, uint8_t port)
-{
+static uint8_t
+z80pack_z80_port_in(z80* z, uint8_t port) {
     z80pack_t* pack = (z80pack_t*)z->userdata;
     if (!pack) return 0xFF;
     
@@ -530,8 +523,8 @@ static uint8_t z80pack_z80_port_in(z80* z, uint8_t port)
     return z80pack_port_in(pack, port);
 }
 
-static void z80pack_z80_port_out(z80* z, uint8_t port, uint8_t val)
-{
+static void
+z80pack_z80_port_out(z80* z, uint8_t port, uint8_t val) {
     z80pack_t* pack = (z80pack_t*)z->userdata;
     if (!pack) return;
     
@@ -540,11 +533,266 @@ static void z80pack_z80_port_out(z80* z, uint8_t port, uint8_t val)
 }
 
 /* ============================================================================
+ * I2C Bit-Bang Slave Emulation for PCF8574T LCD Controller
+ * ============================================================================
+ * The Z80 bit-bangs I2C on PPI Port C using the 8255A's independent
+ * nibble direction control:
+ *   PC0 = SDA (Port C lower nibble, PC0-PC3, direction-switched)
+ *   PC4 = SCL (Port C upper nibble, PC4-PC7, always OUTPUT)
+ * This emulates the PCF8574T slave at address 0x4E (write).
+ */
+
+#define I2C_STATE_IDLE     0
+#define I2C_STATE_RECV     1
+#define I2C_STATE_ACK_WAIT 2
+#define I2C_STATE_SEND     3
+
+static void i2c_lcd_write_data(z80pack_t *pack, uint8_t data);
+
+/* Called when Port C is written.
+ * SCL is extracted from PC4 (upper nibble bit 4), SDA from PC0 (lower nibble bit 0).
+ * The slave ACK injection pulls SDA (PC0) low when in ACK_WAIT state. */
+static void i2c_update(z80pack_t *pack, uint8_t port_c_val)
+{
+    bool sda = (port_c_val & 0x01) ? true : false;
+    bool scl = (port_c_val & 0x10) ? true : false;
+    
+    /* I2C slave ACK injection for i2c_update: when slave is in ACK_WAIT
+     * and ack_pending, slave pulls SDA line low (open-drain).
+     * This affects what the master sees on the pin, even in OUTPUT mode. */
+    if (pack->i2c_state == I2C_STATE_ACK_WAIT && pack->i2c_ack_pending) {
+        sda = false;  /* Slave pulls SDA low for ACK */
+    }
+
+    bool sda_was = pack->i2c_sda_state;
+    bool scl_was = pack->i2c_scl_state;
+    pack->i2c_sda_state = sda;
+    pack->i2c_scl_state = scl;
+
+        if (pack->verbose && (sda != sda_was || scl != scl_was)) {
+            fprintf(stderr, "[I2C] SDA=%d->%d SCL=%d->%d state=%d bits=%d i2c_data=0x%02X\n",
+                    sda_was ? 1 : 0, sda ? 1 : 0, scl_was ? 1 : 0, scl ? 1 : 0,
+                    pack->i2c_state, pack->i2c_bits, pack->i2c_data);
+        }
+        /* START condition: SDA falling while SCL is high */
+        if (!sda && sda_was && scl) {
+        pack->i2c_state = I2C_STATE_RECV;
+        pack->i2c_bits = 0;
+        pack->i2c_data = 0;
+        pack->i2c_byte_count = 0;
+        pack->i2c_ack_pending = 0;
+        pack->i2c_ack_sampled = 0;
+        pack->i2c_ack_received = 0;
+        pack->i2c_read_pending = 0;
+        pack->i2c_dir_change_cooldown = 0;
+        if (pack->verbose) {
+            fprintf(stderr, "[I2C] START detected\n");
+        }
+        return;
+    }
+
+    /* STOP condition: SDA rising while SCL is high
+     * Only detect during ACK_WAIT (after a byte) or IDLE state.
+     * During RECV (data bits), SDA changes are handled as START/STOP
+     * edge cases only if both lines are in the right state. */
+    if (sda && !sda_was && scl && pack->i2c_state != I2C_STATE_RECV) {
+        if (pack->i2c_state != I2C_STATE_IDLE && pack->verbose) {
+            fprintf(stderr, "[I2C] STOP detected (was state=%d, byte_count=%d)\n",
+                    pack->i2c_state, pack->i2c_byte_count);
+        }
+        pack->i2c_state = I2C_STATE_IDLE;
+        pack->i2c_ack_pending = 0;
+        pack->i2c_ack_sampled = 0;
+        return;
+    }
+
+    /* Cooldown to prevent false STOP detection after direction change */
+    if (pack->i2c_dir_change_cooldown > 0) {
+        pack->i2c_dir_change_cooldown--;
+    }
+
+    /* Sample data on SCL rising edge when in RECV state */
+    if (scl && !scl_was && pack->i2c_state == I2C_STATE_RECV) {
+        pack->i2c_data = (uint8_t)((pack->i2c_data << 1) | (sda ? 1 : 0));
+        pack->i2c_bits++;
+        if (pack->verbose) fprintf(stderr, "[I2C] Sampled bit=%d, bits now %d, data=0x%02X\n", sda ? 1 : 0, pack->i2c_bits, pack->i2c_data);
+
+        if (pack->i2c_bits >= 8) {
+            if (pack->i2c_byte_count == 0) {
+                /* First byte is address+R/W */
+                uint8_t addr = pack->i2c_data;
+                if (addr == 0x4E) {
+                    /* PCF8574T address (write), prepare to receive data */
+                    pack->i2c_state = I2C_STATE_ACK_WAIT;
+                    pack->i2c_ack_pending = 1;
+                    pack->i2c_byte_count = 1;
+                    if (pack->verbose) {
+                        fprintf(stderr, "[I2C] Address byte: 0x%02X (ACK to master)\n", addr);
+                    }
+                } else {
+                    if (pack->verbose) {
+                        fprintf(stderr, "[I2C] Address byte 0x%02X (no ACK, waiting)\n", addr);
+                    }
+                    /* No ACK - stay in ACK_WAIT forever (master should STOP) */
+                    pack->i2c_state = I2C_STATE_ACK_WAIT;
+                    pack->i2c_ack_pending = 0;
+                    pack->i2c_byte_count = 1;
+                }
+            } else {
+                /* Data byte received */
+                uint8_t data_byte = pack->i2c_data;
+                if (pack->verbose) {
+                    fprintf(stderr, "[I2C] Data byte: 0x%02X\n", data_byte);
+                }
+                i2c_lcd_write_data(pack, data_byte);
+
+                /* Send ACK */
+                pack->i2c_state = I2C_STATE_ACK_WAIT;
+                pack->i2c_ack_pending = 1;
+            }
+        }
+    }
+
+    /* Transition from ACK_WAIT to RECV when master releases ACK clock:
+     * wait for SCL to fall TWICE — once after the byte bit, once after ACK sampling.
+     * The first falling edge is the end of the last data bit, the second
+     * is when the master finishes sampling the ACK. */
+    if (!scl && scl_was && pack->i2c_state == I2C_STATE_ACK_WAIT) {
+        if (pack->i2c_ack_pending) {
+            if (pack->i2c_ack_sampled) {
+                /* Second falling edge: ACK has been sampled */
+                pack->i2c_state = I2C_STATE_RECV;
+                pack->i2c_bits = 0;
+                pack->i2c_data = 0;
+        pack->i2c_ack_pending = 0;
+        pack->i2c_ack_sampled = 0;
+        if (pack->verbose) {
+                    fprintf(stderr, "[I2C] Master sampled ACK, returning to RECV\n");
+                }
+            } else {
+                /* First falling edge: start of ACK clock, wait for master read */
+                pack->i2c_ack_sampled = 1;
+            }
+        }
+    }
+
+    /* Handle SCL rising edge in ACK_WAIT state */
+    if (scl && !scl_was && pack->i2c_state == I2C_STATE_ACK_WAIT) {
+        if (pack->i2c_ack_pending) {
+            /* ACK clock is high — master will read Port C during this time.
+             * Do NOT set ack_sampled here; it should only be set on the
+             * first falling edge (end of byte), not the rising edge. */
+            if (pack->verbose) {
+                fprintf(stderr, "[I2C] ACK_WAIT: SCL high, master should read SDA\n");
+            }
+        }
+    }
+}
+
+static void
+i2c_lcd_write_data(z80pack_t *pack, uint8_t data) {
+    pack->pcf8574_data = data;
+
+    uint8_t d4 = (data >> 0) & 1;
+    uint8_t d5 = (data >> 1) & 1;
+    uint8_t d6 = (data >> 2) & 1;
+    uint8_t d7 = (data >> 3) & 1;
+    uint8_t rs = (data >> 4) & 1;
+    uint8_t e  = (data >> 6) & 1;
+    uint8_t backlight = (data >> 7) & 1;
+
+    /* Reconstruct the 4-bit nibble from PCF8574 P0-P3
+     * P0=D4, P1=D5, P2=D6, P3=D7 */
+    uint8_t nibble = (d4 << 0) | (d5 << 1) | (d6 << 2) | (d7 << 3);
+
+    if (e && !pack->lcd_last_e) {
+        if (rs) {
+            /* Data: combine high and low nibbles */
+            if (!pack->lcd_nibble_hi) {
+                pack->lcd_last_data = nibble;
+                pack->lcd_nibble_hi = 1;
+            } else {
+                uint8_t full = (pack->lcd_last_data << 4) | nibble;
+                if (!pack->lcd_initialized) {
+                    if (full == 0x28 || full == 0x29) {
+                        pack->lcd_initialized = 1;
+                        pack->lcd_pos = 0;
+                        memset(pack->lcd_display, ' ', sizeof(pack->lcd_display));
+                    }
+                } else {
+                    if (pack->lcd_pos < sizeof(pack->lcd_display)) {
+                        pack->lcd_display[pack->lcd_pos++] = (char)full;
+                    }
+                    /* Render LCD to terminal */
+                    fprintf(stderr, "\n\x1b[2K\rLCD: |");
+                    for (int j = 0; j < 16; j++) fputc(pack->lcd_display[j], stderr);
+                    fprintf(stderr, "|\n\x1b[1A\rLCD: |");
+                    for (int j = 16; j < 32; j++) fputc(pack->lcd_display[j], stderr);
+                    fprintf(stderr, "|\n");
+                }
+                pack->lcd_nibble_hi = 0;
+            }
+        } else {
+            /* Command: combine two nibbles */
+            if (!pack->lcd_nibble_hi) {
+                /* Check for single-nibble commands (init sequence) */
+                uint8_t cmd_nibble = nibble;
+                if (!pack->lcd_init_preamble_done) {
+                    if (cmd_nibble == 0x03) {
+                        /* 8-bit mode function set during init - ignored */
+                        pack->lcd_nibble_hi = 0;
+                    } else if (cmd_nibble == 0x02) {
+                        /* 4-bit mode - mark init preamble complete */
+                        pack->lcd_init_preamble_done = 1;
+                        pack->lcd_nibble_hi = 0;
+                        pack->lcd_pos = 0;
+                        memset(pack->lcd_display, ' ', sizeof(pack->lcd_display));
+                    } else {
+                        pack->lcd_last_data = nibble;
+                        pack->lcd_nibble_hi = 1;
+                    }
+                } else {
+                    pack->lcd_last_data = nibble << 4;
+                    pack->lcd_nibble_hi = 1;
+                }
+            } else {
+                /* Second nibble: combine */
+                uint8_t full = (pack->lcd_last_data & 0xF0) | nibble;
+                if (full == 0x01) {
+                    /* Clear display */
+                    memset(pack->lcd_display, ' ', sizeof(pack->lcd_display));
+                    pack->lcd_pos = 0;
+                    pack->lcd_initialized = 1;
+                    pack->lcd_nibble_hi = 0;
+                } else if (full == 0x02) {
+                    /* Return home */
+                    pack->lcd_pos = 0;
+                    pack->lcd_initialized = 1;
+                    pack->lcd_nibble_hi = 0;
+                } else if (full == 0x28 || full == 0x29) {
+                    if (!pack->lcd_initialized) {
+                        pack->lcd_initialized = 1;
+                        pack->lcd_pos = 0;
+                        memset(pack->lcd_display, ' ', sizeof(pack->lcd_display));
+                    }
+                }
+                pack->lcd_nibble_hi = 0;
+            }
+        }
+        pack->lcd_last_e = e;
+    } else {
+        pack->lcd_last_e = e;
+    }
+
+    (void)backlight;  /* Backlight on/off would dim display */
+}
+
+/* ============================================================================
  * Port I/O
  * ============================================================================ */
 
-uint8_t z80pack_port_in(z80pack_t* pack, uint8_t port)
-{
+uint8_t
+z80pack_port_in(z80pack_t* pack, uint8_t port) {
     pack->port_reads++;
 
     /* DS1302 RTC on $70. Standard three-wire, one port: bit 7 DATA,
@@ -609,15 +857,31 @@ uint8_t z80pack_port_in(z80pack_t* pack, uint8_t port)
 
     /* Zeta 8255 PPI ports */
     if (port == Z80PACK_PORT_PPI_A) {
-        return pack->ppi_a_input ? 0xFF : pack->ppi_port_a;
+        uint8_t v = pack->ppi_a_input ? 0xFF : pack->ppi_port_a;
+
+        /* W5100 SPI MISO on PA0: bit 7 of shift register */
+        if (pack->w5100.spi_cs_state == 0 && pack->w5100.spi_state != SPI_STATE_IDLE) {
+            v = (v & 0xFE) | w5100_spi_read_miso(&pack->w5100);
+        }
+
+        return v;
     }
     if (port == Z80PACK_PORT_PPI_B) {
         return pack->ppi_b_input ? 0xFF : pack->ppi_port_b;
     }
-    if (port == Z80PACK_PORT_PPI_C) {
-        uint8_t v = pack->ppi_port_c;
-        if (pack->ppi_c_upper_input) v |= 0xF0;
-        if (pack->ppi_c_lower_input) v |= 0x0F;
+     if (port == Z80PACK_PORT_PPI_C) {
+         uint8_t v = pack->ppi_port_c;
+         if (pack->ppi_c_upper_input) v |= 0xF0;
+         if (pack->ppi_c_lower_input) v |= 0x0F;
+          /* I2C slave ACK injection: when the slave (PCF8574T) is sending
+           * ACK, pull SDA low on PC0 (lower nibble). PC4=SCL stays unaffected. */
+         if (pack->i2c_state == I2C_STATE_ACK_WAIT && pack->i2c_ack_pending) {
+             v &= ~0x01;  /* Slave ACKs: pull SDA low on PC0 */
+         }
+        if (pack->verbose) {
+            fprintf(stderr, "[PPI] Port C read: raw=0x%02X in=%d v=0x%02X state=%d ack_pending=%d (PC=0x%04X)\n",
+                    pack->ppi_port_c, pack->ppi_c_lower_input, v, pack->i2c_state, pack->i2c_ack_pending, pack->cpu->pc);
+        }
         return v;
     }
     if (port == Z80PACK_PORT_PPI_CTL) {
@@ -697,8 +961,8 @@ uint8_t z80pack_port_in(z80pack_t* pack, uint8_t port)
     return 0xFF;
 }
 
-void z80pack_port_out(z80pack_t* pack, uint8_t port, uint8_t val)
-{
+void
+z80pack_port_out(z80pack_t* pack, uint8_t port, uint8_t val) {
     pack->port_writes++;
 
     /* DS1302 RTC on $70. */
@@ -769,15 +1033,28 @@ void z80pack_port_out(z80pack_t* pack, uint8_t port, uint8_t val)
         if (!pack->ppi_c_upper_input) keep = (uint8_t)((keep & 0x0F) | (val & 0xF0));
         if (!pack->ppi_c_lower_input) keep = (uint8_t)((keep & 0xF0) | (val & 0x0F));
         pack->ppi_port_c = keep;
+
+        /* Bit-banged I2C on PC0 (SDA) / PC4 (SCL) */
+        i2c_update(pack, keep);
+
+        /* Bit-banged SPI on PC5 (CLK) / PC6 (MOSI) / PC7 (CS) */
+        w5100_spi_update(&pack->w5100, keep);
         return;
     }
     if (port == Z80PACK_PORT_PPI_CTL) {
         pack->ppi_control = val;
         if (val & 0x80) {
-            pack->ppi_a_input = (val & 0x10) ? true : false;
-            pack->ppi_b_input = (val & 0x02) ? true : false;
-            pack->ppi_c_upper_input = (val & 0x08) ? true : false;
-            pack->ppi_c_lower_input = (val & 0x01) ? true : false;
+            pack->ppi_a_input = (val & 0x10) ? true : false;     /* D4: Port A direction */
+            pack->ppi_c_upper_input = (val & 0x08) ? true : false; /* D3: Port C upper direction */
+            pack->ppi_b_input = (val & 0x02) ? true : false;    /* D1: Port B direction */
+            /* Standard 8255A: D0 = Port C lower (PC0-PC3) direction (1=Input, 0=Output).
+             * D2 = Group B mode (0=Mode 0, 1=Mode 1) — not a direction bit.
+             * Per three reference articles:
+             *   - computer-museum.ru/technlgy/i8255.htm
+             *   - demin.ws/projects/radio86/info/kr580/i8255.html
+             *   - hromatron.narod.ru/labi/izuchenie-parallelnogo-interfeysa-na-kr580vv55.htm
+             * (hromatron truth table Table 3: D0 controls Port C lower direction). */
+            pack->ppi_c_lower_input = (val & 0x01) ? true : false; /* D0: Port C lower direction */
         } else {
             uint8_t bit = (uint8_t)((val >> 1) & 0x07);
             uint8_t mask = (uint8_t)(1U << bit);
@@ -785,6 +1062,10 @@ void z80pack_port_out(z80pack_t* pack, uint8_t port, uint8_t val)
                 pack->ppi_port_c |= mask;
             } else {
                 pack->ppi_port_c &= (uint8_t)~mask;
+            }
+            /* BSR mode always triggers I2C update for I2C lines (bits 0 and 4) */
+            if (bit == 0 || bit == 4) {
+                i2c_update(pack, pack->ppi_port_c);
             }
         }
         return;
@@ -915,8 +1196,8 @@ void z80pack_port_out(z80pack_t* pack, uint8_t port, uint8_t val)
  * FDC Operations
  * ============================================================================ */
 
-static void z80pack_fdc_execute(z80pack_t* pack, uint8_t cmd)
-{
+static void
+z80pack_fdc_execute(z80pack_t* pack, uint8_t cmd) {
     z80pack_disk_t* disk = &pack->disk[pack->fdc_drive];
     
     pack->fdc_command = cmd;
@@ -954,8 +1235,8 @@ static void z80pack_fdc_execute(z80pack_t* pack, uint8_t cmd)
     }
 }
 
-static void z80pack_fdc_start_read(z80pack_t* pack)
-{
+static void
+z80pack_fdc_start_read(z80pack_t* pack) {
     z80pack_disk_t* disk = &pack->disk[pack->fdc_drive];
     if (!disk->image_data) return;
     
@@ -973,8 +1254,8 @@ static void z80pack_fdc_start_read(z80pack_t* pack)
     pack->fdc_drq = true;
 }
 
-static void z80pack_fdc_start_write(z80pack_t* pack)
-{
+static void
+z80pack_fdc_start_write(z80pack_t* pack) {
     z80pack_disk_t* disk = &pack->disk[pack->fdc_drive];
     if (!disk->image_data) return;
     
@@ -992,8 +1273,8 @@ static void z80pack_fdc_start_write(z80pack_t* pack)
     pack->fdc_drq = true;
 }
 
-static void z80pack_fdc_transfer(z80pack_t* pack, bool is_read)
-{
+static void
+z80pack_fdc_transfer(z80pack_t* pack, bool is_read) {
     if (!pack->fdc_drq || !pack->fdc_transfer_ptr) return;
     
     z80pack_disk_t* disk = &pack->disk[pack->fdc_drive];
@@ -1029,8 +1310,8 @@ static void z80pack_fdc_transfer(z80pack_t* pack, bool is_read)
  * Memory Banking
  * ============================================================================ */
 
-static void z80pack_update_visible_ram_region(z80pack_t* pack, int region)
-{
+static void
+z80pack_update_visible_ram_region(z80pack_t* pack, int region) {
     uint8_t bank;
     uint16_t region_start = (uint16_t)(region * 0x4000);
 
@@ -1065,8 +1346,8 @@ static void z80pack_update_visible_ram_region(z80pack_t* pack, int region)
     }
 }
 
-static void z80pack_update_visible_ram(z80pack_t* pack)
-{
+static void
+z80pack_update_visible_ram(z80pack_t* pack) {
     uint8_t old_vis_4260 = pack->visible_ram[0x4260];
 
     for (int region = 0; region < 4; region++) {
@@ -1083,16 +1364,16 @@ static void z80pack_update_visible_ram(z80pack_t* pack)
     }
 }
 
-static void z80pack_update_bank(z80pack_t* pack, uint8_t port)
-{
+static void
+z80pack_update_bank(z80pack_t* pack, uint8_t port) {
     if (port >= Z80PACK_PORT_BANK0 && port <= Z80PACK_PORT_BANK3) {
         z80pack_update_visible_ram_region(pack, port - Z80PACK_PORT_BANK0);
         memcpy(pack->visible_ram + Z80PACK_COMMON_BASE, pack->common_mem, Z80PACK_COMMON_SIZE);
     }
 }
 
-static uint8_t z80pack_mapped_bank(z80pack_t* pack, uint16_t addr)
-{
+static uint8_t
+z80pack_mapped_bank(z80pack_t* pack, uint16_t addr) {
     uint8_t region = (uint8_t)(addr >> 14);
     if (pack->strict_zeta && !pack->paging_enabled) {
         return region;
@@ -1202,8 +1483,8 @@ z80pack_t* z80pack_create(void)
     return pack;
 }
 
-void z80pack_destroy(z80pack_t* pack)
-{
+void
+z80pack_destroy(z80pack_t* pack) {
     if (!pack) return;
 
     if (pack->terminal_raw_mode) {
@@ -1211,7 +1492,19 @@ void z80pack_destroy(z80pack_t* pack)
         pack->terminal_raw_mode = false;
         pack->stdin_ready = false;
     }
-    
+
+    /* TCP host<->emulator proxy cleanup */
+    for (int i = 0; i < 4; i++) {
+        if (pack->tcp_client_fd[i] >= 0) {
+            close(pack->tcp_client_fd[i]);
+            pack->tcp_client_fd[i] = -1;
+        }
+        if (pack->tcp_listen_fd[i] >= 0) {
+            close(pack->tcp_listen_fd[i]);
+            pack->tcp_listen_fd[i] = -1;
+        }
+    }
+
     for (int i = 0; i < Z80PACK_MAX_DRIVES; i++) {
         z80pack_unmount_disk(pack, i);
     }
@@ -1223,8 +1516,8 @@ void z80pack_destroy(z80pack_t* pack)
     free(pack);
 }
 
-void z80pack_reset(z80pack_t* pack)
-{
+void
+z80pack_reset(z80pack_t* pack) {
     if (!pack) return;
     
     z80_init(pack->cpu);
@@ -1242,7 +1535,24 @@ void z80pack_reset(z80pack_t* pack)
     pack->bank_reg[3] = 0x00;
     pack->mpgena = 0x00;
     pack->paging_enabled = false;
-    
+
+    w5100_model_init(&pack->w5100);
+
+    /* TCP host<->emulator proxy: listen sockets on host ports 80-83.
+     * Connections are only accepted when the driver has put the
+     * corresponding W5100 socket in LISTEN state via SPI. */
+    for (int i = 0; i < 4; i++) {
+        pack->tcp_listen_fd[i] = -1;
+        pack->tcp_client_fd[i] = -1;
+        pack->tcp_client_connected[i] = false;
+        pack->tcp_client_close_pending[i] = false;
+        pack->tcp_rx_head[i] = 0;
+        pack->tcp_rx_tail[i] = 0;
+        pack->tcp_tx_stage_head[i] = 0;
+        pack->tcp_tx_stage_len[i] = 0;
+    }
+    z80pack_tcp_init_listen_sockets(pack);
+
     pack->fdc_drive = 0;
     pack->fdc_track = 0;
     pack->fdc_sector = 0;
@@ -1313,8 +1623,8 @@ void z80pack_reset(z80pack_t* pack)
  * ROM and Disk Loading
  * ============================================================================ */
 
-int z80pack_load_rom(z80pack_t* pack, const char* filename, uint16_t addr)
-{
+int
+z80pack_load_rom(z80pack_t* pack, const char* filename, uint16_t addr) {
     if (!pack || !filename) return -1;
     
     int fd = open(filename, O_RDONLY);
@@ -1349,8 +1659,8 @@ int z80pack_load_rom(z80pack_t* pack, const char* filename, uint16_t addr)
     return 0;
 }
 
-int z80pack_mount_disk(z80pack_t* pack, int drive, const char* filename)
-{
+int
+z80pack_mount_disk(z80pack_t* pack, int drive, const char* filename) {
     if (!pack || drive < 0 || drive >= Z80PACK_MAX_DRIVES) return -1;
     
     z80pack_unmount_disk(pack, drive);
@@ -1412,8 +1722,8 @@ int z80pack_mount_disk(z80pack_t* pack, int drive, const char* filename)
     return 0;
 }
 
-void z80pack_unmount_disk(z80pack_t* pack, int drive)
-{
+void
+z80pack_unmount_disk(z80pack_t* pack, int drive) {
     if (!pack || drive < 0 || drive >= Z80PACK_MAX_DRIVES) return;
     
     if (pack->disk[drive].image_data) {
@@ -1451,8 +1761,315 @@ void z80pack_set_serial_callbacks(z80pack_t* pack,
  * Execution
  * ============================================================================ */
 
-void z80pack_step(z80pack_t* pack)
+/* Initialize a single TCP listen socket on host port 80.
+ * Connections are accepted and assigned to W5100 sockets that the driver
+ * has genuinely placed in LISTEN state via SPI.  Multiple W5100 sockets
+ * can all listen on port 80 in hardware; here we multiplex host
+ * connections onto whichever W5100 socket is in LISTEN state. */
+static void z80pack_tcp_init_listen_sockets(z80pack_t* pack)
 {
+    struct sockaddr_in addr;
+    int opt = 1;
+    int fd;
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        pack->tcp_listen_fd[0] = -1;
+        return;
+    }
+
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(80);
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0 ||
+        listen(fd, 8) < 0) {
+        close(fd);
+        pack->tcp_listen_fd[0] = -1;
+        return;
+    }
+
+    pack->tcp_listen_fd[0] = fd;
+    pack->tcp_listen_fd[1] = -1;
+    pack->tcp_listen_fd[2] = -1;
+    pack->tcp_listen_fd[3] = -1;
+}
+
+/* Deliver buffered host data (tcp_rx_buf) into the W5100 RX buffer for one
+ * socket.  Called whenever new host bytes have been read. */
+static void z80pack_tcp_deliver_rx(z80pack_t* pack, int sock)
+{
+    uint16_t base = W5100_SOCK0_RXBUF + (uint16_t)sock * W5100_SOCKET_BUF_SIZE;
+    uint16_t wr = pack->w5100.rx_write_ptr[sock];
+    uint16_t rd = pack->w5100.rx_read_ptr[sock];
+    uint16_t avail;
+
+    /* Compute space available in the RX buffer. */
+    if (wr >= rd) {
+        avail = W5100_SOCKET_BUF_SIZE - (wr - rd) - 1;
+    } else {
+        avail = rd - wr - 1;
+    }
+
+    /* How much buffered host data can we push? */
+    uint16_t buffered = (uint16_t)((pack->tcp_rx_head[sock] - pack->tcp_rx_tail[sock]) & 0xFFFF);
+    if (buffered == 0) return;
+    if (buffered > avail) buffered = avail;
+    if (buffered == 0) return;
+
+    uint16_t offset = wr & (W5100_SOCKET_BUF_SIZE - 1);
+    uint16_t first = W5100_SOCKET_BUF_SIZE - offset;
+    if (first > buffered) first = buffered;
+
+    memcpy(&pack->w5100.regs[base + offset],
+           &pack->tcp_rx_buf[sock][pack->tcp_rx_tail[sock]], first);
+    pack->tcp_rx_tail[sock] = (uint16_t)((pack->tcp_rx_tail[sock] + first) & (W5100_SOCKET_BUF_SIZE - 1));
+    uint16_t rest = buffered - first;
+    if (rest > 0) {
+        memcpy(&pack->w5100.regs[base],
+               &pack->tcp_rx_buf[sock][pack->tcp_rx_tail[sock]], rest);
+        pack->tcp_rx_tail[sock] = (uint16_t)((pack->tcp_rx_tail[sock] + rest) & (W5100_SOCKET_BUF_SIZE - 1));
+    }
+
+    pack->w5100.rx_write_ptr[sock] = (uint16_t)((wr + buffered) & 0xFFFF);
+    pack->w5100.socket_ir[sock] |= W5100_SN_IR_RECV;
+}
+
+/* Poll TCP listen and client sockets.  Accepts new connections only on W5100
+ * sockets the driver has genuinely placed in LISTEN state.  Reads host bytes
+ * into the W5100 RX buffer and drains W5100 TX buffer data back to hosts. */
+static void z80pack_tcp_poll(z80pack_t* pack)
+{
+    fd_set rfds, wfds;
+    int max_fd = -1;
+    int i;
+
+    /* Advance W5100 close-state timers every poll cycle. */
+    w5100_model_poll_incoming(&pack->w5100);
+
+    FD_ZERO(&rfds);
+    FD_ZERO(&wfds);
+
+    /* Listen socket (port 80): poll if any W5100 socket is in LISTEN
+     * state without a client. */
+    int listen_polled = 0;
+    for (i = 0; i < 4; i++) {
+        if (pack->w5100.socket_sr[i] == W5100_SR_LISTEN &&
+            !pack->tcp_client_connected[i]) {
+            if (pack->tcp_listen_fd[0] >= 0) {
+                FD_SET(pack->tcp_listen_fd[0], &rfds);
+                if (pack->tcp_listen_fd[0] > max_fd) max_fd = pack->tcp_listen_fd[0];
+                listen_polled = 1;
+            }
+            break;
+        }
+    }
+
+    /* Client sockets: readfds for incoming host data, writefds when we have
+     * W5100 TX data to deliver back to the host. */
+    for (i = 0; i < 4; i++) {
+        if (pack->tcp_client_connected[i] && pack->tcp_client_fd[i] >= 0) {
+            FD_SET(pack->tcp_client_fd[i], &rfds);
+            if (pack->tcp_client_fd[i] > max_fd) max_fd = pack->tcp_client_fd[i];
+            if (pack->w5100.host_fifo_len[i] > 0 ||
+                pack->tcp_tx_stage_len[i] > 0) {
+                FD_SET(pack->tcp_client_fd[i], &wfds);
+                if (pack->tcp_client_fd[i] > max_fd) max_fd = pack->tcp_client_fd[i];
+            }
+        }
+    }
+
+    if (max_fd < 0) return;
+
+    struct timeval tv = {0, 0};
+    int n = select(max_fd + 1, &rfds, &wfds, NULL, &tv);
+
+    /* Close host connections whose W5100 socket reached CLOSED
+     * (via CMD_DISCON/CMD_CLOSE from the driver).  This must run even when
+     * select() reports no activity: an idle client waiting for FIN would
+     * otherwise never see the disconnect, because we would return before
+     * reaching the client loop below. */
+    for (i = 0; i < 4; i++) {
+        if (pack->tcp_client_connected[i] &&
+            pack->w5100.socket_sr[i] == W5100_SR_CLOSED &&
+            pack->w5100.host_fifo_len[i] == 0 &&
+            pack->tcp_tx_stage_len[i] == 0) {
+            close(pack->tcp_client_fd[i]);
+            pack->tcp_client_fd[i] = -1;
+            pack->tcp_client_connected[i] = false;
+            pack->tcp_client_close_pending[i] = false;
+            pack->tcp_rx_head[i] = 0;
+            pack->tcp_rx_tail[i] = 0;
+            pack->tcp_tx_stage_head[i] = 0;
+            pack->tcp_tx_stage_len[i] = 0;
+        } else {
+            pack->tcp_client_close_pending[i] = false;
+        }
+    }
+
+    if (n <= 0) return;
+
+    if (listen_polled && FD_ISSET(pack->tcp_listen_fd[0], &rfds)) {
+    /* Accept new connections on the listen socket and assign to the first
+     * W5100 socket in LISTEN state without a client. */
+    for (i = 0; i < 4; i++) {
+        if (pack->tcp_listen_fd[i] < 0) continue;
+        if (!FD_ISSET(pack->tcp_listen_fd[i], &rfds)) continue;
+
+        int client_fd = accept(pack->tcp_listen_fd[i], NULL, NULL);
+        if (client_fd < 0) continue;
+
+        /* Find a W5100 socket in LISTEN state without a client, using
+         * round-robin to distribute connections across all four sockets. */
+        int target = -1;
+        static int rr = 0;
+        for (int s = 0; s < 4; s++) {
+            int idx = (rr + s) & 3;
+            if (pack->w5100.socket_sr[idx] == W5100_SR_LISTEN &&
+                !pack->tcp_client_connected[idx]) {
+                target = idx;
+                rr = (idx + 1) & 3;
+                break;
+            }
+        }
+        if (target < 0) {
+            /* No W5100 socket available to take this connection. */
+            static int refuse_count;
+            if (refuse_count++ < 10) {
+                printf("emu-diag: REFUSED - no W5100 LISTEN slot (sr=%02x %02x %02x %02x)\n",
+                    pack->w5100.socket_sr[0], pack->w5100.socket_sr[1],
+                    pack->w5100.socket_sr[2], pack->w5100.socket_sr[3]);
+            }
+            close(client_fd);
+            continue;
+        }
+
+        static int accept_count;
+        if (accept_count++ < 20) {
+            int active = 0;
+            for (int a = 0; a < 4; a++)
+                if (pack->w5100.socket_sr[a] != W5100_SR_CLOSED) active++;
+            printf("emu-diag: ACCEPT -> W5100 socket %d (sr=%02x %02x %02x %02x active=%d)\n",
+                target,
+                pack->w5100.socket_sr[0], pack->w5100.socket_sr[1],
+                pack->w5100.socket_sr[2], pack->w5100.socket_sr[3], active);
+        }
+
+        int flags = fcntl(client_fd, F_GETFL, 0);
+        if (flags >= 0) {
+            fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+        }
+        /* The driver has put this socket in LISTEN; mark it ESTABLISHED
+         * and raise the connect interrupt so userspace sees it. */
+        pack->w5100.socket_sr[target] = W5100_SR_ESTABLISHED;
+        pack->w5100.socket_ir[target] |= W5100_SN_IR_CON;
+
+        pack->tcp_client_fd[target] = client_fd;
+        pack->tcp_client_connected[target] = true;
+        /* Continue accepting more pending connections on this listen socket. */
+    }
+    }
+
+    /* Handle connected clients: RX from host, TX to host, disconnect. */
+    for (i = 0; i < 4; i++) {
+        if (!pack->tcp_client_connected[i] || pack->tcp_client_fd[i] < 0) continue;
+
+        /* Read bytes sent by the host client into the staging buffer,
+         * then deliver them to the W5100 RX buffer. */
+        if (FD_ISSET(pack->tcp_client_fd[i], &rfds)) {
+            uint8_t buf[2048];
+            ssize_t got = recv(pack->tcp_client_fd[i], buf, sizeof(buf), 0);
+            if (got > 0) {
+                uint16_t to_copy = (uint16_t)got;
+                uint16_t head = pack->tcp_rx_head[i];
+                uint16_t space = (uint16_t)((pack->tcp_rx_tail[i] - head - 1) & (W5100_SOCKET_BUF_SIZE - 1));
+                if (to_copy > space) to_copy = space;
+                if (to_copy > 0) {
+                    uint16_t first = W5100_SOCKET_BUF_SIZE - (head & (W5100_SOCKET_BUF_SIZE - 1));
+                    if (first > to_copy) first = to_copy;
+                    memcpy(&pack->tcp_rx_buf[i][head & (W5100_SOCKET_BUF_SIZE - 1)], buf, first);
+                    uint16_t rest = to_copy - first;
+                    if (rest > 0) {
+                        memcpy(&pack->tcp_rx_buf[i][0], buf + first, rest);
+                    }
+                    pack->tcp_rx_head[i] = (uint16_t)((head + to_copy) & (W5100_SOCKET_BUF_SIZE - 1));
+                }
+                z80pack_tcp_deliver_rx(pack, i);
+            } else if (got == 0) {
+                /* Host client disconnected (EOF). */
+                static int disconnect_count;
+                if (disconnect_count++ < 20) {
+                    printf("emu-diag: DISCONNECT socket %d (sr was=%02x -> CLOSED)\n",
+                        i, pack->w5100.socket_sr[i]);
+                }
+                close(pack->tcp_client_fd[i]);
+                pack->tcp_client_fd[i] = -1;
+                pack->tcp_client_connected[i] = false;
+                pack->tcp_client_close_pending[i] = false;
+                pack->w5100.socket_sr[i] = W5100_SR_CLOSED;
+                pack->w5100.socket_ir[i] = 0;
+                pack->w5100.tx_write_ptr[i] = 0;
+                pack->w5100.tx_rr_ptr[i] = 0;
+                pack->tcp_rx_head[i] = 0;
+                pack->tcp_rx_tail[i] = 0;
+                continue;
+            }
+            /* got < 0 with EAGAIN/EWOULDBLOCK: no data yet, continue. */
+        }
+
+        /* Deliver W5100 TX buffer data back to the host client.
+         * Data reaches the host via the W5100 model's host_fifo, which the
+         * CMD_SEND handler populates.  We stage host_fifo bytes per socket
+         * so that partial host send() results are preserved across polls. */
+        {
+            /* Refill the staging buffer from host_fifo when it is empty. */
+            if (pack->tcp_tx_stage_len[i] == 0 &&
+                pack->w5100.host_fifo_len[i] > 0) {
+                int n = w5100_model_get_sent(&pack->w5100, i,
+                                             pack->tcp_tx_stage[i],
+                                             W5100_SOCKET_BUF_SIZE);
+                pack->tcp_tx_stage_head[i] = 0;
+                pack->tcp_tx_stage_len[i] = (uint16_t)n;
+            }
+
+            /* Send staged data to the host client. */
+            if (pack->tcp_tx_stage_len[i] > 0 &&
+                FD_ISSET(pack->tcp_client_fd[i], &wfds)) {
+                ssize_t sent = send(pack->tcp_client_fd[i],
+                                    pack->tcp_tx_stage[i] + pack->tcp_tx_stage_head[i],
+                                    pack->tcp_tx_stage_len[i], 0);
+                if (sent > 0) {
+                    pack->tcp_tx_stage_head[i] = (uint16_t)(pack->tcp_tx_stage_head[i] + (uint16_t)sent);
+                    pack->tcp_tx_stage_len[i] = (uint16_t)(pack->tcp_tx_stage_len[i] - (uint16_t)sent);
+                } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    close(pack->tcp_client_fd[i]);
+                    pack->tcp_client_fd[i] = -1;
+                    pack->tcp_client_connected[i] = false;
+                    pack->tcp_client_close_pending[i] = false;
+                    pack->w5100.socket_sr[i] = W5100_SR_CLOSED;
+                    pack->w5100.socket_ir[i] = 0;
+                    pack->tcp_rx_head[i] = 0;
+                    pack->tcp_rx_tail[i] = 0;
+                    pack->tcp_tx_stage_head[i] = 0;
+                    pack->tcp_tx_stage_len[i] = 0;
+                }
+            }
+        }
+
+
+    }
+}
+
+void
+z80pack_step(z80pack_t* pack) {
     static uint16_t trace_syscall_pc;
     static uint8_t trace_syscall_pc_ready;
     static uint16_t trace_udata_base;
@@ -1525,6 +2142,9 @@ void z80pack_step(z80pack_t* pack)
 
         /* Execute one instruction */
         z80_step(pack->cpu);
+        if (pack->cpu->sp >= 0xC000 && pack->cpu->sp < g_min_kernel_sp) {
+            g_min_kernel_sp = pack->cpu->sp;
+        }
 
         if (was_halted && pack->cpu->cyc > 0) {
             pack->halted_cycles += pack->cpu->cyc;
@@ -1541,8 +2161,14 @@ void z80pack_step(z80pack_t* pack)
         z80pack_fdc_transfer(pack, true);
     }
 
-    /* Advance CTC timers and assert periodic interrupt requests. */
+/* Advance CTC timers and assert periodic interrupt requests. */
     z80pack_ctc_tick(pack);
+
+/* TCP host<->emulator proxy for W5100 sockets.
+ * Only accepts host connections on sockets the driver has genuinely
+ * put in LISTEN state.  Delivers host bytes to the W5100 RX buffer,
+ * and delivers W5100 TX buffer data back to host clients. */
+    z80pack_tcp_poll(pack);
 
     /* Deliver any vector that could not be raised while another was pending. */
     z80pack_irq_pump(pack);
@@ -1574,8 +2200,8 @@ void z80pack_step(z80pack_t* pack)
     }
 }
 
-void z80pack_run(z80pack_t* pack, uint64_t max_cycles)
-{
+void
+z80pack_run(z80pack_t* pack, uint64_t max_cycles) {
     if (!pack) return;
 
     uint64_t target = max_cycles > 0 ? (pack->total_cycles + max_cycles) : UINT64_MAX;
@@ -1613,8 +2239,8 @@ void z80pack_run(z80pack_t* pack, uint64_t max_cycles)
     }
 }
 
-void z80pack_run_until_halt(z80pack_t* pack)
-{
+void
+z80pack_run_until_halt(z80pack_t* pack) {
     if (!pack) return;
     
     while (pack->running && !pack->halted) {
@@ -1626,15 +2252,15 @@ void z80pack_run_until_halt(z80pack_t* pack)
  * Status and Debug
  * ============================================================================ */
 
-void z80pack_set_watch(z80pack_t* pack, uint16_t addr)
-{
+void
+z80pack_set_watch(z80pack_t* pack, uint16_t addr) {
     if (!pack) return;
     pack->watch_pc = addr;
     pack->watch_hits = 0;
 }
 
-void z80pack_set_trace(z80pack_t* pack, int n)
-{
+void
+z80pack_set_trace(z80pack_t* pack, int n) {
     if (!pack) return;
     free(pack->trace_ring);
     pack->trace_ring = NULL;
@@ -1649,8 +2275,8 @@ void z80pack_set_trace(z80pack_t* pack, int n)
     }
 }
 
-void z80pack_dump_trace(z80pack_t* pack)
-{
+void
+z80pack_dump_trace(z80pack_t* pack) {
     int i;
     if (!pack || pack->trace_len <= 0) return;
     printf("--- last %d PCs of %ld ---\n", pack->trace_len, pack->trace_total);
@@ -1664,15 +2290,15 @@ void z80pack_dump_trace(z80pack_t* pack)
     printf("\n");
 }
 
-void z80pack_set_watchw(z80pack_t* pack, uint16_t addr)
-{
+void
+z80pack_set_watchw(z80pack_t* pack, uint16_t addr) {
     if (!pack) return;
     pack->watch_waddr = addr;
     pack->watch_whits = 0;
 }
 
-void z80pack_set_verbose(z80pack_t* pack, bool enable)
-{
+void
+z80pack_set_verbose(z80pack_t* pack, bool enable) {
     if (pack) pack->verbose = enable;
 }
 
@@ -1684,20 +2310,20 @@ void z80pack_set_kernel_trace(z80pack_t* pack, bool enable)
     if (pack) pack->kernel_trace = enable;
 }
 
-void z80pack_set_system(z80pack_t* pack, z80pack_system_t system)
-{
+void
+z80pack_set_system(z80pack_t* pack, z80pack_system_t system) {
     if (pack) pack->system = system;
 }
 
-void z80pack_set_strict_zeta(z80pack_t* pack, bool enable)
-{
+void
+z80pack_set_strict_zeta(z80pack_t* pack, bool enable) {
     if (!pack) return;
     pack->strict_zeta = enable;
     z80pack_update_visible_ram(pack);
 }
 
-void z80pack_set_stdin_input(z80pack_t* pack, bool enable)
-{
+void
+z80pack_set_stdin_input(z80pack_t* pack, bool enable) {
     if (!pack) return;
     
     pack->enable_stdin_input = enable;
@@ -1722,8 +2348,8 @@ void z80pack_set_stdin_input(z80pack_t* pack, bool enable)
     }
 }
 
-void z80pack_inject_input_string(z80pack_t* pack, const char* str)
-{
+void
+z80pack_inject_input_string(z80pack_t* pack, const char* str) {
     if (!pack || !str) return;
     
     while (*str) {
@@ -1737,13 +2363,13 @@ void z80pack_inject_input_string(z80pack_t* pack, const char* str)
     }
 }
 
-uint16_t z80pack_get_pc(z80pack_t* pack)
-{
+uint16_t
+z80pack_get_pc(z80pack_t* pack) {
     return pack ? pack->cpu->pc : 0;
 }
 
-uint16_t z80pack_get_sp(z80pack_t* pack)
-{
+uint16_t
+z80pack_get_sp(z80pack_t* pack) {
     return pack ? pack->cpu->sp : 0;
 }
 
@@ -1752,8 +2378,8 @@ uint64_t z80pack_get_cycles(z80pack_t* pack)
     return pack ? pack->total_cycles : 0;
 }
 
-void z80pack_print_status(z80pack_t* pack)
-{
+void
+z80pack_print_status(z80pack_t* pack) {
     if (!pack) return;
     
     fprintf(stderr, "\n=== Z80pack Status ===\n");
@@ -1774,34 +2400,51 @@ void z80pack_print_status(z80pack_t* pack)
     fprintf(stderr, "Banks: %02X %02X %02X %02X\n",
             pack->bank_reg[0], pack->bank_reg[1],
             pack->bank_reg[2], pack->bank_reg[3]);
+    fprintf(stderr, "Kernel stack min SP: 0x%04X\n", g_min_kernel_sp);
+
+    /* LCD display output */
+    if (pack->lcd_display[0] != '\0') {
+        fprintf(stderr, "LCD: \"");
+        int started = 0;
+        for (int i = 0; i < sizeof(pack->lcd_display); i++) {
+            if (pack->lcd_display[i] == ' ') {
+                if (!started || pack->lcd_display[i+1] != '\0')
+                    continue;
+            } else {
+                started = 1;
+            }
+            fputc(pack->lcd_display[i], stderr);
+        }
+        fprintf(stderr, "\"\n");
+    }
 }
 
 /* ============================================================================
  * Memory Access
  * ============================================================================ */
 
-uint8_t z80pack_read_byte(z80pack_t* pack, uint16_t addr)
-{
+uint8_t
+z80pack_read_byte(z80pack_t* pack, uint16_t addr) {
     if (!pack) return 0xFF;
     return z80pack_z80_read_byte(pack, addr);
 }
 
-void z80pack_write_byte(z80pack_t* pack, uint16_t addr, uint8_t val)
-{
+void
+z80pack_write_byte(z80pack_t* pack, uint16_t addr, uint8_t val) {
     if (!pack) return;
     z80pack_z80_write_byte(pack, addr, val);
 }
 
-uint16_t z80pack_read_word(z80pack_t* pack, uint16_t addr)
-{
+uint16_t
+z80pack_read_word(z80pack_t* pack, uint16_t addr) {
     if (!pack) return 0;
     uint8_t lo = z80pack_read_byte(pack, addr);
     uint8_t hi = z80pack_read_byte(pack, addr + 1);
     return (uint16_t)hi << 8 | lo;
 }
 
-void z80pack_write_word(z80pack_t* pack, uint16_t addr, uint16_t val)
-{
+void
+z80pack_write_word(z80pack_t* pack, uint16_t addr, uint16_t val) {
     if (!pack) return;
     z80pack_write_byte(pack, addr, val & 0xFF);
     z80pack_write_byte(pack, addr + 1, (val >> 8) & 0xFF);

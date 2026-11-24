@@ -79,8 +79,8 @@
  * Everything above them is still the tree's own: the handler, the copy
  * direction, the chunking, the ordering, and the caller's own struct.
  */
-#include <stdint.h>
-#include <string.h>
+#include "ztypes.h"
+#include "libc.h"
 
 /* From test_host/zeta_host.c: the flat address space standing in for the
  * caller's four banked windows. */
@@ -137,18 +137,18 @@ static muzix_mproc_t g_init_mp;
 static muzix_syscall_context_t g_kernel_ctx;
 static muzix_userspace_syscall_context_t g_ctx;
 
-static void chip_write(uint8_t port, uint8_t value)
-{
+static void
+chip_write(uint8_t port, uint8_t value) {
     muzix_host_ds1302_write(port, value);
 }
 
-static uint8_t chip_read(uint8_t port)
-{
+static uint8_t
+chip_read(uint8_t port) {
     return muzix_host_ds1302_read(port);
 }
 
-static int setup(void)
-{
+static int
+setup(void) {
     muzix_host_user_space_clear();
     muzix_host_port_attach(chip_write, chip_read);
     muzix_host_ds1302_reset();
@@ -235,21 +235,21 @@ void muzix_mm_memory_init(muzix_mm_service_t *mm,
     (void)mm;
 }
 
-int muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page)
-{
+int
+muzix_mm_alloc_page(muzix_mm_service_t *mm, uint8_t *page) {
     (void)mm;
     (void)page;
     return -1;
 }
 
-void muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page)
-{
+void
+muzix_mm_free_page(muzix_mm_service_t *mm, uint8_t page) {
     (void)mm;
     (void)page;
 }
 
-int muzix_mm_load_kernel_map(muzix_mm_service_t *mm, const process_map_t *map)
-{
+int
+muzix_mm_load_kernel_map(muzix_mm_service_t *mm, const process_map_t *map) {
     (void)mm;
     (void)map;
     return -1;
@@ -419,8 +419,8 @@ static int test_null_pointer_is_still_refused(void)
     return rc == -1 ? 0 : 1;
 }
 
-int main(void)
-{
+int
+main(void) {
     static int (*const cases[])(void) = {
         test_write_back_reaches_the_caller,
         test_the_right_bytes_came_back,

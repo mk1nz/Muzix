@@ -11,10 +11,7 @@
 #ifndef ZETA_SBC_V2_EMULATOR_H
 #define ZETA_SBC_V2_EMULATOR_H
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdarg.h>
+#include "ztypes.h"
 
 /* Z80 type from superzazu/z80 - include from parent directory */
 #include "../z80/z80.h"
@@ -1206,6 +1203,23 @@ bool zeta_in_boot_timeout_mode(zeta_sbc_v2_t* zeta);
  * @param zeta Pointer to emulator context
  */
 void zeta_check_boot_timeout(zeta_sbc_v2_t* zeta);
+
+/* ============================================================================
+ * Z80pack/CPMSIM Support
+ * ============================================================================ */
+
+/* Host TCP port to listen for injected connections (0 = disabled) */
+#define W5100_INJECTION_TCP_PORT  8080
+
+/**
+ * Inject a TCP connection into the W5100 model
+ * @param zeta Pointer to zeta_sbc_v2_t emulator context
+ * @param remote_ip Remote IP address (32-bit)
+ * @param remote_port Remote port
+ * @param sock_idx Which W5100 socket to use (0-3)
+ * @return 0 on success, -1 on error
+ */
+int w5100_inject_tcp_connection(zeta_sbc_v2_t* zeta, uint32_t remote_ip, uint16_t remote_port, int sock_idx);
 
 /* ============================================================================
  * Z80pack/CPMSIM Support

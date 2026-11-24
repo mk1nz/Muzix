@@ -77,8 +77,8 @@ static muzix_z80_syscall_args_t *g_syscall_args;
 extern uint16_t muzix_switch_pending;
 static muzix_userspace_syscall_context_t *userspace_context;
 
-void muzix_z80_set_syscall_handler(muzix_z80_syscall_handler_t handler)
-{
+void
+muzix_z80_set_syscall_handler(muzix_z80_syscall_handler_t handler) {
     syscall_handler = handler;
 }
 
@@ -95,13 +95,13 @@ void muzix_z80_set_mapping_hooks(muzix_z80_mapping_hook_t enter_kernel,
  * cell end up holding a pointer to itself; the handoff then saw a state of
  * zero, refused, and spun forever. Publish the value directly instead. */
 
-void muzix_z80_set_zeta_state(zeta_state_t *state)
-{
+void
+muzix_z80_set_zeta_state(zeta_state_t *state) {
     g_zeta_state_ptr = state;
 }
 
-void muzix_z80_set_zeta_state_ptr(zeta_state_t **ptr)
-{
+void
+muzix_z80_set_zeta_state_ptr(zeta_state_t **ptr) {
     /* Retained for API compatibility. The shared cell is a single pointer;
      * treating it as a pointer-to-pointer is what left the userspace handoff
      * reading a state of zero, refusing, and spinning forever. */
@@ -120,11 +120,9 @@ void muzix_z80_bind_userspace_context(
     }
 }
 
-uint16_t muzix_z80_userspace_handler(muzix_z80_syscall_args_t *args)
-{
-    if (!userspace_context || !args) {
-        return 0xffffu;
-    }
+uint16_t
+muzix_z80_userspace_handler(muzix_z80_syscall_args_t *args) {
+    if (!userspace_context || !args) return 0xffffu;
     /*
      * CLAIM THIS PROCESS'S RESUME POINT, FIRST THING.
      *
@@ -184,9 +182,7 @@ int32_t muzix_z80_userspace_syscall_entry(int32_t syscall_num,
                                           int32_t arg2,
                                           int32_t arg3)
 {
-    if (!userspace_context) {
-        return -1;
-    }
+    if (!userspace_context) return -1;
     return muzix_handle_userspace_syscall(
         userspace_context, syscall_num, arg1, arg2, arg3);
 }
@@ -208,9 +204,7 @@ uint16_t muzix_z80_dispatch_frame(zeta_state_t *state,
      * trap passes it and the exit path needs its own copy. */
     (void)state;
 
-    if (!syscall_handler) {
-        return 0xffffu;
-    }
+    if (!syscall_handler) return 0xffffu;
 
     /* Every call on this path is direct.  An indirect one goes through
      * ___sdcc_call_iy, which platform/zeta-v2/muzix_sdccall.peep rewrites to a

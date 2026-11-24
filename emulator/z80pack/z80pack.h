@@ -15,9 +15,7 @@
 #ifndef Z80PACK_H
 #define Z80PACK_H
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
+#include "ztypes.h"
 
 /* DS1302 RTC: standard three-wire interface on a single port (Zeta SBC V2).
  * Bit 7 DATA (bidirectional), bit 6 CLK, bit 5 RD, bit 4 CE, bit 0 the bit the
@@ -34,13 +32,14 @@ void ds1302_set_time_bin(uint8_t sec, uint8_t min, uint8_t hour,
                          uint8_t date, uint8_t month, uint8_t dow,
                          uint8_t year);
 #include <termios.h>
+#include "../zeta_sbc_v2/w5100_model.h"
 
 /* ============================================================================
  * Z80 CPU Configuration
  * ============================================================================ */
 
 /* CPU frequency used by this emulator model; it is not the board's U17 clock. */
-#define Z80PACK_CPU_CLOCK       7372800UL
+#define Z80PACK_CPU_CLOCK       4000000UL
 /* UART_CLK/2, the signal the Zeta SBC V2 wires to CTC channel 0's CLK/TG input
  * (board README, "Interrupts").  It is the CPU clock divided by 8 at this
  * build's rate, and channel 1 counts what channel 0 divides it down to. */
@@ -271,6 +270,46 @@ struct z80pack_t {
     bool ppi_c_upper_input;
     bool ppi_c_lower_input;
 
+/* PCF8574T I2C slave emulation (bit-banged by software on Port C bits PC0/PC1) */
+bool i2c_sda_state;          /* 1 if SDA line is high (released), 0 if low */
+    bool i2c_scl_state;          /* 1 if SCL line is high, 0 if low */
+    int  i2c_state;              /* FSM: 0=IDLE, 1=RECV, 2=ACK_WAIT, 3=SEND */
+    uint8_t i2c_data;            /* Shift register for byte transfer */
+    uint8_t i2c_bits;            /* Bit counter for current byte */
+    uint8_t i2c_ack_pending;     /* 1 if ACK is being driven by slave */
+    uint8_t i2c_ack_sampled;     /* 1 if ACK has been sampled during SCL HIGH */
+    uint8_t i2c_ack_received;    /* 1 if ACK was successfully received */
+    uint8_t i2c_read_pending;    /* Address ACK is followed by slave transmission */
+    uint8_t i2c_scl_stable_high; /* 1 if SCL has been HIGH for at least one sample */
+    uint32_t i2c_dir_change_cooldown; /* Cycles to suppress STOP after Port C dir change */
+    uint64_t i2c_dir_change_time;    /* Cycle when direction change occurred */
+    uint8_t i2c_pin_state;       /* Actual pin state of PC0/PC1 driven by PCF8574T */
+    uint8_t i2c_byte_count;      /* Bytes received in current transaction */
+    
+    /* I2C timing enforcement (in CPU cycles at 4 MHz) */
+    uint64_t i2c_last_scl_change_cycles;  /* Cycles when SCL last changed */
+    uint64_t i2c_last_sda_change_cycles;  /* Cycles when SDA last changed */
+    bool i2c_scl_was_high;                 /* Track SCL for timing */
+    uint64_t i2c_scl_high_start_cycles;    /* When SCL went HIGH */
+    uint64_t i2c_sda_low_start_cycles;     /* When SDA went LOW */
+    
+    /* Clock stretching support */
+    bool i2c_slave_stretching;    /* Slave is holding SCL low */
+    uint64_t i2c_stretch_start_cycles;  /* When stretching started */
+    
+    /* PPI Port A/B pin state for INPUT mode */
+    uint8_t ppi_a_pin_state;  /* Actual pin state for Port A (PC0-7) */
+    uint8_t ppi_b_pin_state;  /* Actual pin state for Port B (PC0-7) */
+    
+    uint8_t pcf8574_data;        /* PCF8574T output latch */
+    uint8_t lcd_display[32];     /* 1602 LCD display buffer (2 lines x 16 chars) */
+    uint8_t lcd_pos;             /* Current cursor position */
+    uint8_t lcd_last_e;          /* Previous E pin state for edge detection */
+    uint8_t lcd_last_data;       /* Previous data nibble (for 4-bit mode) */
+    uint8_t lcd_nibble_hi;       /* 1 if high nibble received (4-bit mode) */
+    uint8_t lcd_initialized;     /* 1 after LCD initialization sequence */
+    uint8_t lcd_init_preamble_done; /* 1 after 0x03x3 + 0x02 init preamble */
+
     /* DS1302 RTC bit-bang state (port 0x70) */
     uint8_t rtc_latch;
     uint8_t rtc_cmd;
@@ -285,7 +324,29 @@ struct z80pack_t {
     bool rtc_write_mode;
     bool rtc_ce_high;
     bool rtc_clk_high;
-    
+
+    /* W5100 SPI Ethernet model */
+    w5100_state_t w5100;
+
+    /* TCP host<->emulator proxy for W5100 sockets.
+     * One listen socket per W5100 socket, on host port 80+i.
+     * The emulator only accepts a host connection when the driver
+     * has genuinely put the W5100 socket in LISTEN state via SPI. */
+    int tcp_listen_fd[4];
+    int tcp_client_fd[4];
+    bool tcp_client_connected[4];
+    bool tcp_client_close_pending[4];
+    uint8_t tcp_rx_buf[4][W5100_SOCKET_BUF_SIZE];
+    uint16_t tcp_rx_head[4];
+    uint16_t tcp_rx_tail[4];
+
+    /* TX staging: data read from the W5100 model's host_fifo but not yet
+     * fully sent to the host client.  Preserves unsent bytes across poll
+     * cycles when host send() returns partial results or EAGAIN. */
+    uint8_t tcp_tx_stage[4][W5100_SOCKET_BUF_SIZE];
+    uint16_t tcp_tx_stage_head[4];
+    uint16_t tcp_tx_stage_len[4];
+
     /* Disk system */
     z80pack_disk_t disk[Z80PACK_MAX_DRIVES];
     

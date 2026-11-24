@@ -1,8 +1,7 @@
 #ifndef MUZIX_MPROC_MODEL_H
 #define MUZIX_MPROC_MODEL_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../mm/mm_service.h"
 #include "../platform/zeta-v2/bank_io.h"

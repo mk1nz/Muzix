@@ -1,12 +1,12 @@
 #include "system_entry.h"
 
-#include <string.h>
+#include "libc.h"
 
-void muzix_system_entry_init(muzix_system_entry_t *entry,
-                            const process_map_t *kernel_map,
-                            uint8_t init_pid,
-                            const process_map_t *init_map)
-{
+void
+muzix_system_entry_init(muzix_system_entry_t *entry,
+                        const process_map_t *kernel_map,
+                        uint8_t init_pid,
+                        const process_map_t *init_map) {
     if (!entry) {
         return;
     }
@@ -18,14 +18,14 @@ void muzix_system_entry_init(muzix_system_entry_t *entry,
     muzix_kernel_startup_init(&entry->startup, kernel_map, init_pid, init_map);
 }
 
-void muzix_system_entry_register(muzix_system_entry_t *entry,
-                                int slot,
-                                uint8_t pid,
-                                const muzix_mproc_t *mp,
-                                const process_map_t *map,
-                                uint8_t q,
-                                uint8_t flags)
-{
+void
+muzix_system_entry_register(muzix_system_entry_t *entry,
+                            int slot,
+                            uint8_t pid,
+                            const muzix_mproc_t *mp,
+                            const process_map_t *map,
+                            uint8_t q,
+                            uint8_t flags) {
     if (!entry || !mp || !map) {
         return;
     }
@@ -33,8 +33,8 @@ void muzix_system_entry_register(muzix_system_entry_t *entry,
     muzix_kernel_startup_register(&entry->startup, slot, pid, mp, map, q, flags);
 }
 
-void muzix_system_entry_start(muzix_system_entry_t *entry)
-{
+void
+muzix_system_entry_start(muzix_system_entry_t *entry) {
     if (!entry) {
         return;
     }
@@ -46,8 +46,8 @@ void muzix_system_entry_start(muzix_system_entry_t *entry)
     }
 }
 
-void muzix_system_entry_switch_to_kernel(muzix_system_entry_t *entry)
-{
+void
+muzix_system_entry_switch_to_kernel(muzix_system_entry_t *entry) {
     if (!entry) {
         return;
     }
@@ -57,8 +57,8 @@ void muzix_system_entry_switch_to_kernel(muzix_system_entry_t *entry)
     entry->booted = 0;
 }
 
-int muzix_system_entry_current_pid(const muzix_system_entry_t *entry)
-{
+int
+muzix_system_entry_current_pid(const muzix_system_entry_t *entry) {
     if (!entry) {
         return -1;
     }

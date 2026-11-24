@@ -1,7 +1,7 @@
 #include "startup.h"
 
-static int test_startup(void)
-{
+static int
+test_startup(void) {
     muzix_kernel_startup_t ks;
     process_map_t kernel_map = {{7, 7, 7, 7}};
     process_map_t init_map = {{1, 2, 3, 3}};
@@ -24,7 +24,7 @@ static int test_startup(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     return test_startup();
 }

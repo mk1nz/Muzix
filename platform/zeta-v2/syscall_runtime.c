@@ -5,7 +5,7 @@
 
 #include "../../lib/syscall.h"
 
-#include <string.h>
+#include "libc.h"
 
 static process_map_t g_cached_map;
 static int g_current_pid;
@@ -37,8 +37,8 @@ static void syscall_enter_kernel_hook(zeta_state_t *state)
     zeta_kernel_enter(zeta, &g_syscall_user_context);
 }
 
-static void syscall_restore_user_hook(zeta_state_t *state)
-{
+static void
+syscall_restore_user_hook(zeta_state_t *state) {
     zeta_state_t *zeta = g_runtime_state ? g_runtime_state : state;
 
     if (!zeta) {

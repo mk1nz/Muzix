@@ -18,7 +18,7 @@
  * Nothing in this file is in KERNEL_C_MODULES, so SDCC never sees it.
  */
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "emulator.h"
 
@@ -39,18 +39,18 @@ void muzix_host_ds1302_get_registers(uint8_t *registers);
 int muzix_host_ds1302_is_running(void);
 void muzix_host_ds1302_set_write_protect(uint8_t reg);
 
-void muzix_host_ds1302_reset(void)
-{
+void
+muzix_host_ds1302_reset(void) {
     ds1302_reset();
 }
 
-void muzix_host_ds1302_write(uint8_t port, uint8_t value)
-{
+void
+muzix_host_ds1302_write(uint8_t port, uint8_t value) {
     ds1302_write(&g_zeta, port, value);
 }
 
-uint8_t muzix_host_ds1302_read(uint8_t port)
-{
+uint8_t
+muzix_host_ds1302_read(uint8_t port) {
     return ds1302_read(&g_zeta, port);
 }
 
@@ -69,17 +69,17 @@ void muzix_host_ds1302_set_registers(const uint8_t *registers)
     ds1302_set_time_bcd_raw(buf);
 }
 
-void muzix_host_ds1302_get_registers(uint8_t *registers)
-{
+void
+muzix_host_ds1302_get_registers(uint8_t *registers) {
     ds1302_get_time_bcd(registers);
 }
 
-int muzix_host_ds1302_is_running(void)
-{
+int
+muzix_host_ds1302_is_running(void) {
     return ds1302_is_running() ? 1 : 0;
 }
 
-void muzix_host_ds1302_set_write_protect(uint8_t reg)
-{
+void
+muzix_host_ds1302_set_write_protect(uint8_t reg) {
     ds1302_set_write_protect(reg);
 }

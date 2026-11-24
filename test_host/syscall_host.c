@@ -54,7 +54,7 @@
  * trapping is what lets that assertion be made at all.
  */
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../lib/syscall.h"
 

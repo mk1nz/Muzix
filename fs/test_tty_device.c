@@ -1,6 +1,6 @@
 #include "tty_device.h"
 
-#include <string.h>
+#include "libc.h"
 
 typedef struct {
     uint8_t tx[32];
@@ -10,20 +10,20 @@ typedef struct {
     uint8_t rx_count;
 } test_serial_t;
 
-static void test_send(uint8_t byte, void *userdata)
-{
+static void
+test_send(uint8_t byte, void *userdata) {
     test_serial_t *serial = (test_serial_t *)userdata;
     serial->tx[serial->tx_count++] = byte;
 }
 
-static uint8_t test_recv(void *userdata)
-{
+static uint8_t
+test_recv(void *userdata) {
     test_serial_t *serial = (test_serial_t *)userdata;
     return serial->rx[serial->rx_pos++];
 }
 
-static uint8_t test_available(void *userdata)
-{
+static uint8_t
+test_available(void *userdata) {
     test_serial_t *serial = (test_serial_t *)userdata;
     return serial->rx_pos < serial->rx_count;
 }
@@ -47,8 +47,8 @@ extern void muzix_host_tick_set(uint16_t ticks);
 
 static uint8_t g_ticks_per_poll;
 
-static uint8_t test_available_ticking(void *userdata)
-{
+static uint8_t
+test_available_ticking(void *userdata) {
     muzix_host_tick = (uint16_t)(muzix_host_tick + g_ticks_per_poll);
     return test_available(userdata);
 }
@@ -851,8 +851,8 @@ static int test_erase_will_not_take_the_terminator(void)
     return 0;
 }
 
-int main(void)
-{
+int
+main(void) {
     /* Both phases run.  test_tty_device() used to be unreachable: its first case
      * queued "world" with no newline and read it, and a canonical console waits
      * for a whole line, so it spun there for ever - measured, not inferred, and

@@ -1,21 +1,21 @@
 #include "mem_map.h"
 #include "../mm/mm_service.h"
 
-#include <string.h>
+#include "libc.h"
 
-static uint8_t muzix_page_from_phys(uint32_t phys)
-{
+static uint8_t
+muzix_page_from_phys(uint32_t phys) {
     return (uint8_t)(phys / ZETA_BANK_SIZE);
 }
 
-void muzix_proc_init(muzix_proc_t *proc,
-                     uint32_t text_phys,
-                     uint32_t data_phys,
-                     uint32_t stack_phys,
-                     uint16_t text_len,
-                     uint16_t data_len,
-                     uint16_t stack_len)
-{
+void
+muzix_proc_init(muzix_proc_t *proc,
+                uint32_t text_phys,
+                uint32_t data_phys,
+                uint32_t stack_phys,
+                uint16_t text_len,
+                uint16_t data_len,
+                uint16_t stack_len) {
     if (!proc) {
         return;
     }
@@ -34,8 +34,8 @@ void muzix_proc_init(muzix_proc_t *proc,
     proc->seg[MUZIX_SEG_STACK].mem_len = stack_len;
 }
 
-uint16_t muzix_umap(const muzix_proc_t *proc, int seg, uint16_t vir_addr, uint16_t bytes)
-{
+uint16_t
+muzix_umap(const muzix_proc_t *proc, int seg, uint16_t vir_addr, uint16_t bytes) {
     const muzix_mem_map_t *m;
     uint16_t seg_base;
 

@@ -1,6 +1,6 @@
 #include "inode_table.h"
 
-#include <string.h>
+#include "libc.h"
 
 void muzix_fs_inode_table_init(muzix_fs_inode_table_t *table)
 {

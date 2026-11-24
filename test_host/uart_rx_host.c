@@ -27,20 +27,20 @@
  * that need to pretend a byte arrived use host_uart_rx_pending_set().
  */
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../platform/zeta-v2/tick.h"
 
 static uint16_t g_rx_count;
 static uint8_t g_rx_pending;
 
-uint16_t muzix_uart_rx_count(void)
-{
+uint16_t
+muzix_uart_rx_count(void) {
     return g_rx_count;
 }
 
-uint8_t muzix_uart_rx_pending(void)
-{
+uint8_t
+muzix_uart_rx_pending(void) {
     uint8_t value = g_rx_pending;
 
     g_rx_pending = 0;
@@ -54,8 +54,8 @@ void host_uart_rx_pending_set(void)
     g_rx_pending = 1;
 }
 
-void host_uart_rx_reset(void)
-{
+void
+host_uart_rx_reset(void) {
     g_rx_count = 0;
     g_rx_pending = 0;
 }

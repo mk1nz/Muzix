@@ -100,7 +100,9 @@ SOURCE_DIRS = %w[kernel fs mm pm platform/zeta-v2 test_host emulator lib apps].f
 # them.
 EXTRA_SOURCES = {
   'emulator/zeta_sbc_v2/emu_ds1302.c' => %w[-Iemulator -Iemulator/zeta_sbc_v2],
+  'emulator/zeta_sbc_v2/w5100_model.c' => %w[-Iemulator -Iemulator/zeta_sbc_v2],
   'test_host/ds1302_host.c' => %w[-Iemulator -Iemulator/zeta_sbc_v2],
+  'platform/zeta-v2/test_w5100.c' => %w[-Iemulator/zeta_sbc_v2],
   # lib/syscall.h reaches upwards from lib/, so the -I is one level different
   # from every other entry here.
   'test_host/syscall_host.c' => %w[-Ilib]
@@ -110,8 +112,9 @@ EXTRA_SOURCES = {
 # not being used to build the kernel - only to resolve #include - so the fact
 # that these are SDCC sources is irrelevant.
 INCLUDES = %w[
-  -I. -Ikernel -Ifs -Imm -Ipm -Iplatform/zeta-v2
+  -I. -Iinclude -Ikernel -Ifs -Imm -Ipm -Iplatform/zeta-v2
   -Iplatform/zeta-v2/test_kernel -Ilib -Iapps -Ishell -Itools -Itest_host
+  -Iemulator/zeta_sbc_v2
 ].freeze
 
 # -DMUZIX_TTY_CALLBACKS=1 on every host test binary, and why:
@@ -334,7 +337,7 @@ puts format("  %d of %d modules compile on the host", POOL.size, MODULES.size)
 # undeclared build failure is a build failure.  That is what stops a portability
 # accident from reading as a portability statement.
 UNPORTABLE_UNDECLARED = MODULES.select { |_p, defs| defs.nil? }
-                               .reject { |p, _| File.read(p).include?('host-test-not-portable') }
+                               .reject { |p, _| File.read(p, encoding: 'UTF-8').include?('host-test-not-portable') }
 
 UNPORTABLE_UNDECLARED.keys.sort.each do |p|
   puts format('  x not portable, UNDECLARED: %-38s %s', rel(p), module_errors[p])
@@ -404,7 +407,7 @@ end
 
 def resolve(test)
   name = rel(test)
-  source = File.read(test)
+    source = File.read(test, encoding: 'UTF-8')
 
   # A test can say it is not host-portable, in its own words, and be believed:
   #   /* host-test-not-portable: why the Z80 makes this unrunnable here */

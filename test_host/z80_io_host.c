@@ -22,7 +22,7 @@
  * into every host test binary.
  */
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "../platform/zeta-v2/z80_io.h"
 #include "../platform/zeta-v2/uart_io.h"
@@ -48,8 +48,8 @@ uint16_t muzix_host_port_log_count(void);
 uint8_t muzix_host_port_log_port(uint16_t index);
 uint8_t muzix_host_port_log_value(uint16_t index);
 
-void muzix_host_reset_port_log(void)
-{
+void
+muzix_host_reset_port_log(void) {
     uint16_t index;
 
     for (index = 0; index < g_port_log_count; index++) {
@@ -59,18 +59,18 @@ void muzix_host_reset_port_log(void)
     g_port_log_count = 0;
 }
 
-uint16_t muzix_host_port_log_count(void)
-{
+uint16_t
+muzix_host_port_log_count(void) {
     return g_port_log_count;
 }
 
-uint8_t muzix_host_port_log_port(uint16_t index)
-{
+uint8_t
+muzix_host_port_log_port(uint16_t index) {
     return index < g_port_log_count ? g_port_log[index].port : 0;
 }
 
-uint8_t muzix_host_port_log_value(uint16_t index)
-{
+uint8_t
+muzix_host_port_log_value(uint16_t index) {
     return index < g_port_log_count ? g_port_log[index].value : 0;
 }
 
@@ -83,8 +83,8 @@ void z80_halt(void)
 {
 }
 
-void z80_idle_halt(void)
-{
+void
+z80_idle_halt(void) {
 }
 
 /* z80_capture_sp()          platform/zeta-v2/z80_io.s    reads SP through the stack
@@ -118,12 +118,12 @@ void z80_enable_interrupts(void)
 {
 }
 
-void z80_disable_interrupts(void)
-{
+void
+z80_disable_interrupts(void) {
 }
 
-void z80_outb(uint8_t port, uint8_t value)
-{
+void
+z80_outb(uint8_t port, uint8_t value) {
     if (g_port_log_count < HOST_PORT_LOG_SIZE) {
         g_port_log[g_port_log_count].port = port;
         g_port_log[g_port_log_count].value = value;
@@ -146,8 +146,8 @@ void z80_outb(uint8_t port, uint8_t value)
  * which is the same answer a machine with no peripheral on it gives. */
 uint8_t z80_inb(uint8_t port);
 
-uint8_t z80_inb(uint8_t port)
-{
+uint8_t
+z80_inb(uint8_t port) {
     return g_port_read != 0 ? g_port_read(port) : 0u;
 }
 
@@ -158,8 +158,8 @@ void muzix_host_port_attach(void (*write)(uint8_t port, uint8_t value),
     g_port_read = read;
 }
 
-void muzix_host_port_detach(void)
-{
+void
+muzix_host_port_detach(void) {
     g_port_write = 0;
     g_port_read = 0;
 }
@@ -180,20 +180,20 @@ void muzix_zeta_uart_rx_irq_enable(void)
 {
 }
 
-void muzix_zeta_uart_send(uint8_t byte, void *userdata)
-{
+void
+muzix_zeta_uart_send(uint8_t byte, void *userdata) {
     (void)byte;
     (void)userdata;
 }
 
-uint8_t muzix_zeta_uart_recv(void *userdata)
-{
+uint8_t
+muzix_zeta_uart_recv(void *userdata) {
     (void)userdata;
     return 0;
 }
 
-uint8_t muzix_zeta_uart_available(void *userdata)
-{
+uint8_t
+muzix_zeta_uart_available(void *userdata) {
     (void)userdata;
     return 0;
 }
@@ -209,22 +209,22 @@ void muzix_zeta_enter_userspace(void)
  * for and platform/zeta-v2/tick.s for the rules it restates. */
 uint16_t muzix_host_tick;
 
-void muzix_host_tick_set(uint16_t ticks)
-{
+void
+muzix_host_tick_set(uint16_t ticks) {
     muzix_host_tick = ticks;
 }
 
-void muzix_host_tick_advance(uint16_t ticks)
-{
+void
+muzix_host_tick_advance(uint16_t ticks) {
     muzix_host_tick = (uint16_t)(muzix_host_tick + ticks);
 }
 
-void muzix_tick_init(void)
-{
+void
+muzix_tick_init(void) {
 }
 
-uint16_t muzix_tick_now(void)
-{
+uint16_t
+muzix_tick_now(void) {
     return muzix_host_tick;
 }
 
@@ -246,14 +246,14 @@ uint8_t muzix_tick_expired(uint16_t deadline)
     return (uint8_t)((uint16_t)(muzix_host_tick - deadline) < 0x8000u);
 }
 
-void muzix_tick_add_process_time(uint32_t *counter, uint16_t *stamp)
-{
+void
+muzix_tick_add_process_time(uint32_t *counter, uint16_t *stamp) {
     *counter += (uint16_t)(muzix_host_tick - *stamp);
     *stamp = muzix_host_tick;
 }
 
-void muzix_tick_stamp_store(uint16_t *stamp)
-{
+void
+muzix_tick_stamp_store(uint16_t *stamp) {
     *stamp = muzix_host_tick;
 }
 
@@ -273,8 +273,8 @@ void muzix_tick_stamp_store(uint16_t *stamp)
  * platform/zeta-v2/tick.s. */
 static uint8_t g_host_cycles;
 
-uint8_t muzix_tick_cycles(void)
-{
+uint8_t
+muzix_tick_cycles(void) {
     return g_host_cycles;
 }
 
@@ -286,8 +286,8 @@ void host_cycle_advance(uint8_t counts)
     g_host_cycles = (uint8_t)(g_host_cycles + counts);
 }
 
-void host_cycle_set(uint8_t counts)
-{
+void
+host_cycle_set(uint8_t counts) {
     g_host_cycles = counts;
 }
 

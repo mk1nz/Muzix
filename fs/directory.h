@@ -1,7 +1,7 @@
 #ifndef MUZIX_FS_DIRECTORY_H
 #define MUZIX_FS_DIRECTORY_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "fs_types.h"
 

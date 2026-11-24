@@ -1,7 +1,7 @@
 #ifndef MUZIX_INIT_TASK_H
 #define MUZIX_INIT_TASK_H
 
-#include <stdint.h>
+#include "ztypes.h"
 
 #include "bootstrap.h"
 

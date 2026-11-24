@@ -2,7 +2,7 @@
 #include "mm_service.h"
 #include "mm_copy.h"
 #include "mproc_model.h"
-#include <string.h>
+#include "libc.h"
 
 static muzix_mm_service_t g_mm;
 static muzix_mm_service_t *g_mm_ptr = 0;

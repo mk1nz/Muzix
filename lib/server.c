@@ -1,35 +1,21 @@
 #include "server.h"
 #include "syscall.h"
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_IPC_ANY 255
-
-/*
- * "No source" for a received message.
- *
- * This file does not include include/muzix_ipc.h - it defines its own message
- * struct and its own MUZIX_IPC_ANY above - so it cannot reach MUZIX_PROC_NONE
- * from there.  Defining a local spelling in the same style as MUZIX_IPC_ANY is
- * consistent with how this module is written.
- *
- * The value matters: m_source is the kernel slot of the process that sent a
- * request, and slot 0 is the idle slot, which never sends.  So a message whose
- * source is still 0 after a receive did not carry one, and replying to 0 would
- * address a slot nobody registered - the same class of mistake as a server
- * number invented by hand.  The reply path refuses to run in that case.
- */
 #define MUZIX_IPC_NO_SOURCE 0
 
-static muzix_server_t *g_servers[4] = {0};
+static muzix_server_t *g_servers[8] = {0};
 static int g_server_count = 0;
 
-int muzix_server_init(muzix_server_t *server, uint8_t type, uint8_t id, muzix_server_ops_t *ops) {
-    if (!server || !ops || g_server_count >= 4) return -1;
+int
+muzix_server_init(muzix_server_t *server, uint8_t type, uint8_t id,
+                  muzix_server_ops_t *ops) {
+    if (!server || !ops || g_server_count >= 8) return -1;
 
     memset(server, 0, sizeof(*server));
-    server->server_type = type;
-    server->server_id = id;
-    /* Deliberately NOT 10 + id, which is what this read as and what made two
+    server->server_type = type; server->server_id = id;
+    /* Deliberately NOT 10 + id
      * unrelated numbering schemes.
      *
      * `10 + slot` is the ARRAY INDEX that muzix_ipc_register_server() writes,
@@ -46,11 +32,7 @@ int muzix_server_init(muzix_server_t *server, uint8_t type, uint8_t id, muzix_se
      *
      * See include/muzix_ipc.h for the full list of the five places that each
      * invented this arithmetic. */
-    server->ipc_slot = 0;
-    server->active = 1;
-    server->ops = ops;
-
-    g_servers[g_server_count++] = server;
+    server->ipc_slot = 0; server->active = 1; server->ops = ops; g_servers[g_server_count++] = server;
     return 0;
 }
 
@@ -65,14 +47,16 @@ int muzix_server_init(muzix_server_t *server, uint8_t type, uint8_t id, muzix_se
  * zeroed buffer, because the two directions need DIFFERENT buffers and the
  * shared helper cannot express that.  See the note in muzix_server_run().
  */
-static int server_recv(int dest_id, muzix_server_message_t *out)
-{
+static int
+server_recv(int dest_id, muzix_server_message_t *out) {
     if (!out) return -1;
     memset(out, 0, sizeof(*out));
     return sys_ipc_sendrec(dest_id, out);
 }
 
-static int server_sendrec(int dest_id, int unused, const muzix_server_message_t *msg, muzix_server_message_t *reply) {
+static int
+server_sendrec(int dest_id, int unused, const muzix_server_message_t *msg,
+               muzix_server_message_t *reply) {
     (void)unused;
     muzix_server_message_t kmsg;
     memcpy(&kmsg, msg, sizeof(kmsg));
@@ -98,16 +82,15 @@ static int server_sendrec(int dest_id, int unused, const muzix_server_message_t 
     return result;
 }
 
-int muzix_server_send(muzix_server_t *server, int dest_type, int dest_id, const void *msg, void *reply) {
-    (void)server;
-    (void)dest_type;
-    (void)dest_id;
-    (void)msg;
-    (void)reply;
+int
+muzix_server_send(muzix_server_t *server, int dest_type, int dest_id,
+                  const void *msg, void *reply) {
+    (void)server; (void)dest_type; (void)dest_id; (void)msg; (void)reply;
     return -1;
 }
-int muzix_server_run(muzix_server_t *server)
-{
+
+int
+muzix_server_run(muzix_server_t *server) {
     if (!server || !server->active || !server->ops) return -1;
 
     if (server->ops->init) {
@@ -138,8 +121,7 @@ int muzix_server_run(muzix_server_t *server)
          * fs_server_handle() starts with memset(out), which would destroy an
          * aliased request.
          */
-        muzix_server_message_t in;
-        muzix_server_message_t out;
+        muzix_server_message_t in, out;
 
         int result = server_recv(MUZIX_IPC_ANY, &in);
 
@@ -165,17 +147,20 @@ int muzix_server_run(muzix_server_t *server)
     return 0;
 }
 
-void muzix_server_exit(muzix_server_t *server) {
+void
+muzix_server_exit(muzix_server_t *server) {
     if (server) {
         server->active = 0;
     }
 }
 
 /* Userspace copy functions using syscalls */
-int muzix_copy_to_user(uint16_t addr, const void *buf, size_t len) {
+int
+muzix_copy_to_user(uint16_t addr, const void *buf, size_t len) {
     return sys_ipc_srv_copy_to_client(addr, buf, len);
 }
 
-int muzix_copy_from_user(uint16_t addr, void *buf, size_t len) {
+int
+muzix_copy_from_user(uint16_t addr, void *buf, size_t len) {
     return sys_ipc_srv_copy_from_client(addr, buf, len);
 }

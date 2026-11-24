@@ -8,6 +8,8 @@
  */
 
 #include "../lib/libc.h"
+#include "../lib/lcd.h"
+#include "../lib/i2c.h"
 
 static const char *const MONTHS[12] = {
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -43,8 +45,8 @@ static void put2(int value)
     putchar((char)('0' + value));
 }
 
-static void print_time(const struct rtc_time *t)
-{
+static void
+print_time(const struct rtc_time *t) {
     int weekday = (t->weekday >= 1 && t->weekday <= 7) ? t->weekday - 1 : 0;
     int month = (t->month >= 1 && t->month <= 12) ? t->month - 1 : 0;
 
@@ -57,8 +59,68 @@ static void print_time(const struct rtc_time *t)
     printf(" %d\n", MUZIX_RTC_YEAR_BASE + t->year);
 }
 
-static void print_usage(void)
-{
+static void
+print_time_lcd(const struct rtc_time *t) {
+    int weekday = (t->weekday >= 1 && t->weekday <= 7) ? t->weekday - 1 : 0;
+    int month = (t->month >= 1 && t->month <= 12) ? t->month - 1 : 0;
+    int year = MUZIX_RTC_YEAR_BASE + t->year;
+    char buf[17];
+    int d, m, h, y;
+
+    /* Line 1: "Wed HH:MM" (7 chars, leaves room) */
+    buf[0] = WEEKDAYS[weekday][0];
+    buf[1] = WEEKDAYS[weekday][1];
+    buf[2] = WEEKDAYS[weekday][2];
+    buf[3] = ' ';
+    h = t->hour;
+    m = 0;
+    while (h >= 10) { h -= 10; m++; }
+    buf[4] = '0' + m;
+    buf[5] = '0' + h;
+    buf[6] = ':';
+    h = t->minute;
+    m = 0;
+    while (h >= 10) { h -= 10; m++; }
+    buf[7] = '0' + m;
+    buf[8] = '0' + h;
+    buf[9] = '\0';
+    lcd_print(buf);
+
+    /* Line 2: "MMM DD YYYY" (11 chars, right-aligned at position 2) */
+    lcd_set_cursor(2, 1);
+    buf[0] = MONTHS[month][0];
+    buf[1] = MONTHS[month][1];
+    buf[2] = MONTHS[month][2];
+    buf[3] = ' ';
+    d = t->day;
+    m = 0;
+    while (d >= 10) { d -= 10; m++; }
+    buf[4] = '0' + m;
+    buf[5] = '0' + d;
+    buf[6] = ' ';
+    /* Four-digit year: extract each digit by subtraction (no division helpers).
+     * Year is 2000-2099. */
+    y = year;
+    /* Thousands digit */
+    h = 0;
+    while (y >= 1000) { y -= 1000; h++; }
+    buf[7] = '0' + h;
+    /* Hundreds digit */
+    h = 0;
+    while (y >= 100) { y -= 100; h++; }
+    buf[8] = '0' + h;
+    /* Tens digit */
+    h = 0;
+    while (y >= 10) { y -= 10; h++; }
+    buf[9] = '0' + h;
+    /* Ones digit */
+    buf[10] = '0' + y;
+    buf[11] = '\0';
+    lcd_print(buf);
+}
+
+static void
+print_usage(void) {
     puts("usage: date\n");
     puts("       date MMDDhhmm\n");
     puts("       date MMDDhhmmYYYY\n");
@@ -178,8 +240,8 @@ static int days_in_month(int month, int year)
     return length[month - 1];
 }
 
-int main(int argc, char *argv[])
-{
+int
+main(int argc, char *argv[]) {
     struct rtc_time t;
     int month;
     int day;
@@ -187,10 +249,17 @@ int main(int argc, char *argv[])
     int minute;
     int year;
 
-    if (argc == 1) {
+    if (argc == 1 || (argc == 2 && strcmp(argv[1], "-d") == 0)) {
+        int lcd_mode = (argc == 2 && strcmp(argv[1], "-d") == 0);
         if (get_rtc(&t) != 0) {
             report_chip_bytes(&t);
             return 1;
+        }
+        if (lcd_mode) {
+            lcd_init();
+            lcd_clear();
+            print_time_lcd(&t);
+            return 0;
         }
         print_time(&t);
         return 0;

@@ -1,15 +1,15 @@
 #include "path.h"
 
-#include <string.h>
+#include "libc.h"
 
 #define MUZIX_FS_PATH_COMPONENT_MAX 14u
 
-int muzix_fs_path_lookup(void *context,
-                         uint16_t root_inode,
-                         const char *path,
-                         muzix_fs_path_component_lookup_fn lookup,
-                         uint16_t *inode)
-{
+int
+muzix_fs_path_lookup(void *context,
+                     uint16_t root_inode,
+                     const char *path,
+                     muzix_fs_path_component_lookup_fn lookup,
+                     uint16_t *inode) {
     char component[MUZIX_FS_PATH_COMPONENT_MAX + 1];
     uint16_t current;
     uint16_t next;

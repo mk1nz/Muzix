@@ -1,8 +1,7 @@
 #ifndef MUZIX_BLOCK_DEVICE_H
 #define MUZIX_BLOCK_DEVICE_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include "ztypes.h"
 
 #define MUZIX_FS_BLOCK_SIZE 512u
 
