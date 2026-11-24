@@ -7,6 +7,7 @@
 *.sym
 *.noi
 *.cdb
+*.lib
 
 # ...but lib/server_crt0.asm is the ONE *.asm the build never writes: it is
 # the hand-written userspace server startup that FS/MM/PM link, and the same
